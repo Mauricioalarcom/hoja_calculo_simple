@@ -2,6 +2,7 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
+#include <iomanip>
 
 // ─────────────────────────────────────────────────────────────
 GUI::GUI(SparseMatrix& matrix)
@@ -99,6 +100,13 @@ void GUI::drawGrid() {
     for (Node* n : nodes)
         occupied[{n->row, n->col}] = n->value;
 
+    int r1 = 0, c1 = 0, r2 = -1, c2 = -1;
+    bool hasRange = parseRange(inputRange, r1, c1, r2, c2);
+    if (hasRange) {
+        if (r1 > r2) std::swap(r1, r2);
+        if (c1 > c2) std::swap(c1, c2);
+    }
+
     // Header de columnas (A, B, C, ...)
     for (int c = 0; c < COLS; c++) {
         std::string label(1, char('A' + c));
@@ -124,8 +132,16 @@ void GUI::drawGrid() {
             float y = OFFSET_Y + r * CELL_H;
             auto key = std::make_pair(r, c);
 
+            bool inRange = hasRange && r >= r1 && r <= r2 && c >= c1 && c <= c2;
+
             bool hasValue = occupied.count(key);
-            sf::Color fill = hasValue ? sf::Color(220, 240, 220) : sf::Color::White;
+            sf::Color fill = sf::Color::White;
+            if (inRange) {
+                fill = sf::Color(255, 250, 200);
+            }
+            if (hasValue) {
+                fill = inRange ? sf::Color(225, 245, 200) : sf::Color(220, 240, 220);
+            }
 
             auto rect = makeRect(x, y, CELL_W, CELL_H, fill);
             window.draw(rect);
@@ -145,6 +161,8 @@ void GUI::drawTopPanel() {
                        sf::Color(230, 230, 240), sf::Color::Transparent);
     window.draw(bg);
 
+    bool showCursor = static_cast<int>(cursorClock.getElapsedTime().asSeconds() / 0.5f) % 2 == 0;
+
     // Labels
     window.draw(makeText("Celda:", 5, 15));
     window.draw(makeText("Valor:", 265, 15));
@@ -154,17 +172,17 @@ void GUI::drawTopPanel() {
     auto cellBox = makeRect(65, 10, 160, 28,
                             focusCell ? sf::Color(255,255,200) : sf::Color::White);
     window.draw(cellBox);
-    window.draw(makeText(inputCell + (focusCell ? "|" : ""), 70, 15));
+    window.draw(makeText(inputCell + ((focusCell && showCursor) ? "|" : ""), 70, 15));
 
     auto valBox = makeRect(325, 10, 160, 28,
                            focusValue ? sf::Color(255,255,200) : sf::Color::White);
     window.draw(valBox);
-    window.draw(makeText(inputValue + (focusValue ? "|" : ""), 330, 15));
+    window.draw(makeText(inputValue + ((focusValue && showCursor) ? "|" : ""), 330, 15));
 
     auto rangeBox = makeRect(530, 10, 160, 28,
                              focusRange ? sf::Color(255,255,200) : sf::Color::White);
     window.draw(rangeBox);
-    window.draw(makeText(inputRange + (focusRange ? "|" : ""), 535, 15));
+    window.draw(makeText(inputRange + ((focusRange && showCursor) ? "|" : ""), 535, 15));
 
     // Botones operaciones básicas
     struct Btn { std::string label; float x; sf::Color color; };
@@ -240,7 +258,7 @@ void GUI::executeAggregation(const std::string& op) {
         else if (op == "PROMEDIO") result = sheet.avgRange(r1,c1,r2,c2);
         else if (op == "MAX")      result = sheet.maxRange(r1,c1,r2,c2);
         else if (op == "MIN")      result = sheet.minRange(r1,c1,r2,c2);
-        statusMsg = op + "(" + inputRange + ") = " + std::to_string(result);
+        statusMsg = op + "(" + inputRange + ") = " + formatDouble(result);
     }
     // Si no hay rango, intentar con celda/fila/columna
     else {
@@ -250,7 +268,7 @@ void GUI::executeAggregation(const std::string& op) {
         else if (op == "PROMEDIO") result = sheet.avgRange(r,0,r,COLS-1);
         else if (op == "MAX")      result = sheet.maxRange(r,0,r,COLS-1);
         else if (op == "MIN")      result = sheet.minRange(r,0,r,COLS-1);
-        statusMsg = op + "(fila " + std::to_string(r+1) + ") = " + std::to_string(result);
+        statusMsg = op + "(fila " + std::to_string(r+1) + ") = " + formatDouble(result);
     }
 }
 
@@ -273,6 +291,27 @@ bool GUI::parseRange(const std::string& ref, int& r1, int& c1, int& r2, int& c2)
     if (sep == std::string::npos) return false;
     return parseCell(ref.substr(0, sep), r1, c1) &&
            parseCell(ref.substr(sep + 1), r2, c2);
+}
+
+std::string GUI::formatDouble(double val) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(4) << val;
+    std::string out = oss.str();
+
+    auto dot = out.find('.');
+    if (dot != std::string::npos) {
+        while (!out.empty() && out.back() == '0') {
+            out.pop_back();
+        }
+        if (!out.empty() && out.back() == '.') {
+            out.pop_back();
+        }
+    }
+
+    if (out == "-0") {
+        out = "0";
+    }
+    return out.empty() ? "0" : out;
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────

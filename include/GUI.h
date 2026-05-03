@@ -13,6 +13,7 @@ private:
     SparseMatrix& sheet;
     sf::RenderWindow window;
     sf::Font font;
+    sf::Clock cursorClock;
 
     // ── Grilla ────────────────────────────────────────────────
     static const int COLS       = 10;
@@ -49,6 +50,8 @@ private:
     bool parseCell(const std::string& ref, int& row, int& col);
     // Convierte "A1:C4" → (r1,c1,r2,c2)
     bool parseRange(const std::string& ref, int& r1, int& c1, int& r2, int& c2);
+    // Formatea un double sin decimales si es entero
+    std::string formatDouble(double val);
 
     sf::Text makeText(const std::string& str, float x, float y,
                       unsigned size = 14, sf::Color color = sf::Color::Black);
