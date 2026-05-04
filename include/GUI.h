@@ -32,6 +32,13 @@ private:
     bool focusValue = false;
     bool focusRange = false;
 
+    // ── Selección con el mouse ────────────────────────────────
+    int selectedStartRow = -1;
+    int selectedStartCol = -1;
+    int selectedEndRow = -1;
+    int selectedEndCol = -1;
+    bool isDragging = false;
+
     // ── Helpers ───────────────────────────────────────────────
     void handleEvents();
     void render();

@@ -41,11 +41,98 @@ void GUI::handleEvents() {
                 else if (focusValue) { focusCell=false; focusValue=false; focusRange=true;  }
                 else                 { focusCell=true;  focusValue=false; focusRange=false; }
             }
-            // Backspace
+            // Backspace y Delete
             if (event.key.code == sf::Keyboard::BackSpace) {
                 if (focusCell  && !inputCell.empty())  inputCell.pop_back();
-                if (focusValue && !inputValue.empty()) inputValue.pop_back();
-                if (focusRange && !inputRange.empty()) inputRange.pop_back();
+                else if (focusValue && !inputValue.empty()) inputValue.pop_back();
+                else if (focusRange && !inputRange.empty()) inputRange.pop_back();
+                else if (focusValue && inputValue.empty()) {
+                    executeDelete(); // Si presiona borrar y el campo ya está vacío, borra la celda/rango de la grilla
+                }
+            }
+
+            if (event.key.code == sf::Keyboard::Delete) {
+                executeDelete();
+                inputValue = "";
+            }
+
+            // Moverse con las flechas del teclado
+            if (event.key.code == sf::Keyboard::Up || event.key.code == sf::Keyboard::Down ||
+                event.key.code == sf::Keyboard::Left || event.key.code == sf::Keyboard::Right) {
+
+                bool shiftPressed = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+
+                if (selectedStartRow == -1 || selectedStartCol == -1) {
+                    selectedStartRow = 0; selectedStartCol = 0;
+                    selectedEndRow = 0; selectedEndCol = 0;
+                } else {
+                    int& tr = shiftPressed ? selectedEndRow : selectedStartRow;
+                    int& tc = shiftPressed ? selectedEndCol : selectedStartCol;
+
+                    if (event.key.code == sf::Keyboard::Up && tr > 0) tr--;
+                    if (event.key.code == sf::Keyboard::Down && tr < ROWS - 1) tr++;
+                    if (event.key.code == sf::Keyboard::Left && tc > 0) tc--;
+                    if (event.key.code == sf::Keyboard::Right && tc < COLS - 1) tc++;
+
+                    if (!shiftPressed) {
+                        selectedEndRow = selectedStartRow;
+                        selectedEndCol = selectedStartCol;
+                    }
+                }
+
+                std::string startCell = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
+                std::string endCell = std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
+                inputRange = startCell + ":" + endCell;
+
+                // inputCell se mantiene en su ancla o en la celda normal
+                inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
+
+                focusCell = false;
+                focusValue = true;
+                focusRange = false;
+                inputValue = "";
+            }
+
+            // Tecla Enter para insertar el valor en la celda
+            if (event.key.code == sf::Keyboard::Enter) {
+                if (inputValue.empty()) {
+                    executeDelete(); // Si da Enter con el campo vacío, se borra el contenido
+                } else {
+                    executeInsert();
+                }
+
+                // Mover a la celda de abajo
+                if (selectedStartRow != -1 && selectedStartCol != -1) {
+                    if (selectedStartRow < ROWS - 1) {
+                        selectedStartRow++;
+                    }
+                    selectedEndRow = selectedStartRow;
+                    selectedEndCol = selectedStartCol;
+
+                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
+                    inputRange = inputCell + ":" + inputCell;
+
+                    focusCell = false;
+                    focusValue = true;
+                    focusRange = false;
+                    inputValue = ""; // Limpiar valor para la nueva celda
+                }
+            }
+
+            // Comandos con Ctrl + P (o Cmd + P en Mac)
+            if (event.key.code == sf::Keyboard::P &&
+               (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::RControl) ||
+                sf::Keyboard::isKeyPressed(sf::Keyboard::LSystem) || sf::Keyboard::isKeyPressed(sf::Keyboard::RSystem))) {
+                // Remove buttons functionality and trigger command palette or action
+                // For demonstration, let's say it triggers "Consultar" if a cell is selected.
+                if (selectedStartRow != -1 && selectedStartCol != -1 && selectedStartRow == selectedEndRow && selectedStartCol == selectedEndCol) {
+                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
+                    executeQuery();
+                } else if (selectedStartRow != -1 && selectedStartCol != -1) {
+                    inputRange = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1) + ":" +
+                                 std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
+                    executeAggregation("SUMA"); // Default action for range
+                }
             }
         }
 
@@ -70,19 +157,46 @@ void GUI::handleEvents() {
                 if (x > 510 && x < 670) { focusCell=false; focusValue=false; focusRange=true;  }
             }
 
-            // Botones de operación (fila 1 de botones y=50)
-            if (y > 50 && y < 80) {
-                if (x > 10  && x < 110) executeInsert();
-                if (x > 120 && x < 220) executeDelete();
-                if (x > 230 && x < 330) executeQuery();
-            }
+            // Clic en la grilla para seleccionar celdas
+            if (y > OFFSET_Y && y < OFFSET_Y + ROWS * CELL_H && x > OFFSET_X && x < OFFSET_X + COLS * CELL_W) {
+                if (event.mouseButton.button == sf::Mouse::Left) {
+                    isDragging = true;
+                    selectedStartCol = (x - OFFSET_X) / CELL_W;
+                    selectedStartRow = (y - OFFSET_Y) / CELL_H;
+                    selectedEndCol = selectedStartCol;
+                    selectedEndRow = selectedStartRow;
 
-            // Botones de agregación (fila 2 y=85)
-            if (y > 85 && y < 115) {
-                if (x > 10  && x < 110) executeAggregation("SUMA");
-                if (x > 120 && x < 220) executeAggregation("PROMEDIO");
-                if (x > 230 && x < 330) executeAggregation("MAX");
-                if (x > 340 && x < 440) executeAggregation("MIN");
+                    // Update inputCell or inputRange
+                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
+                    inputRange = inputCell + ":" + inputCell;
+
+                    // Cambiar el foco al campo de valor para poder escribir directamente
+                    focusCell = false;
+                    focusValue = true;
+                    focusRange = false;
+                    inputValue = ""; // Opcional: limpiar el valor anterior al elegir nueva celda
+                }
+            }
+        }
+
+        if (event.type == sf::Event::MouseMoved) {
+            if (isDragging) {
+                int x = event.mouseMove.x;
+                int y = event.mouseMove.y;
+                if (y > OFFSET_Y && y < OFFSET_Y + ROWS * CELL_H && x > OFFSET_X && x < OFFSET_X + COLS * CELL_W) {
+                    selectedEndCol = (x - OFFSET_X) / CELL_W;
+                    selectedEndRow = (y - OFFSET_Y) / CELL_H;
+
+                    std::string startCell = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
+                    std::string endCell = std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
+                    inputRange = startCell + ":" + endCell;
+                }
+            }
+        }
+
+        if (event.type == sf::Event::MouseButtonReleased) {
+            if (event.mouseButton.button == sf::Mouse::Left) {
+                isDragging = false;
             }
         }
     }
@@ -127,6 +241,18 @@ void GUI::drawGrid() {
             bool hasValue = occupied.count(key);
             sf::Color fill = hasValue ? sf::Color(220, 240, 220) : sf::Color::White;
 
+            // Highlight selected cells
+            if (selectedStartRow != -1 && selectedStartCol != -1) {
+                int minCol = std::min(selectedStartCol, selectedEndCol);
+                int maxCol = std::max(selectedStartCol, selectedEndCol);
+                int minRow = std::min(selectedStartRow, selectedEndRow);
+                int maxRow = std::max(selectedStartRow, selectedEndRow);
+
+                if (r >= minRow && r <= maxRow && c >= minCol && c <= maxCol) {
+                    fill = sf::Color(180, 200, 255); // Selection color
+                }
+            }
+
             auto rect = makeRect(x, y, CELL_W, CELL_H, fill);
             window.draw(rect);
 
@@ -166,29 +292,7 @@ void GUI::drawTopPanel() {
     window.draw(rangeBox);
     window.draw(makeText(inputRange + (focusRange ? "|" : ""), 535, 15));
 
-    // Botones operaciones básicas
-    struct Btn { std::string label; float x; sf::Color color; };
-    std::vector<Btn> btns = {
-        {"Insertar",  10,  sf::Color(100,180,100)},
-        {"Eliminar", 120,  sf::Color(180,100,100)},
-        {"Consultar",230,  sf::Color(100,130,200)},
-    };
-    for (auto& b : btns) {
-        window.draw(makeRect(b.x, 50, 100, 28, b.color));
-        window.draw(makeText(b.label, b.x + 8, 55, 13, sf::Color::White));
-    }
-
-    // Botones agregación
-    std::vector<Btn> aggBtns = {
-        {"SUMA",    10,  sf::Color(80,150,200)},
-        {"PROM",   120,  sf::Color(80,150,200)},
-        {"MAX",    230,  sf::Color(80,150,200)},
-        {"MIN",    340,  sf::Color(80,150,200)},
-    };
-    for (auto& b : aggBtns) {
-        window.draw(makeRect(b.x, 85, 100, 28, b.color));
-        window.draw(makeText(b.label, b.x + 25, 90, 13, sf::Color::White));
-    }
+    // Remove old buttons code here since requested to convert to commands
 }
 
 void GUI::drawBottomPanel() {
@@ -203,8 +307,86 @@ void GUI::executeInsert() {
     int r, c;
     if (!parseCell(inputCell, r, c)) { statusMsg = "Celda invalida. Usa formato A1"; return; }
     if (inputValue.empty())          { statusMsg = "Ingresa un valor"; return; }
-    sheet.insert(r, c, inputValue);
-    statusMsg = "Insertado " + inputCell + " = " + inputValue;
+
+    std::string valueToInsert = inputValue;
+
+    // Evaluador básico de fórmulas (ej: =SUMA(A1:B2) o suma simple)
+    if (inputValue.length() > 0 && inputValue[0] == '=') {
+        std::string formula = inputValue.substr(1);
+        // Convertir a mayúsculas
+        std::transform(formula.begin(), formula.end(), formula.begin(), ::toupper);
+
+        if (formula.find("SUMA(") == 0 || formula.find("SUM(") == 0 ||
+            formula.find("PROMEDIO(") == 0 || formula.find("PROM(") == 0 ||
+            formula.find("MAX(") == 0 || formula.find("MIN(") == 0) {
+
+            size_t start = formula.find('(') + 1;
+            size_t end = formula.find(')');
+            if (start != std::string::npos && end != std::string::npos) {
+                std::string rangeStr = formula.substr(start, end - start);
+                int r1, c1, r2, c2;
+
+                double result = 0.0;
+                bool isRange = parseRange(rangeStr, r1, c1, r2, c2);
+                bool isCell = false;
+                if (!isRange) {
+                    isCell = parseCell(rangeStr, r1, c1);
+                    r2 = r1; c2 = c1;
+                }
+
+                if (isRange || isCell) {
+                    if (formula.find("SUM") == 0) {
+                        result = sheet.sumRange(r1, c1, r2, c2);
+                    } else if (formula.find("PROM") == 0) {
+                        result = sheet.avgRange(r1, c1, r2, c2);
+                    } else if (formula.find("MAX") == 0) {
+                        result = sheet.maxRange(r1, c1, r2, c2);
+                    } else if (formula.find("MIN") == 0) {
+                        result = sheet.minRange(r1, c1, r2, c2);
+                    }
+
+                    valueToInsert = std::to_string(result);
+                    // Quitar los decimales extra:
+                    valueToInsert.erase(valueToInsert.find_last_not_of('0') + 1, std::string::npos);
+                    if (valueToInsert.back() == '.') valueToInsert.pop_back();
+                } else {
+                    // Evaluar suma de celdas simples separadas por + (ej: =A1+B2)
+                    statusMsg = "Error en formato de fórmula"; return;
+                }
+            }
+        } else if (formula.find('+') != std::string::npos) {
+            // Soporte básico para =A1+B2+C3
+            std::stringstream ss(formula);
+            std::string cellRef;
+            double totalSum = 0.0;
+            bool valid = true;
+
+            while (std::getline(ss, cellRef, '+')) {
+                int rr, cc;
+                if (parseCell(cellRef, rr, cc)) {
+                    std::string valStr = sheet.query(rr, cc);
+                    try {
+                        totalSum += std::stod(valStr);
+                    } catch (...) {
+                        // Ignorar si no es número
+                    }
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                valueToInsert = std::to_string(totalSum);
+                valueToInsert.erase(valueToInsert.find_last_not_of('0') + 1, std::string::npos);
+                if (valueToInsert.back() == '.') valueToInsert.pop_back();
+            } else {
+                statusMsg = "Error sumando celdas: " + formula; return;
+            }
+        }
+    }
+
+    sheet.insert(r, c, valueToInsert);
+    statusMsg = "Insertado " + inputCell + " = " + valueToInsert;
 }
 
 void GUI::executeDelete() {
