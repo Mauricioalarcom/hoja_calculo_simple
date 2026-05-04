@@ -158,16 +158,26 @@ void GUI::handleEvents() {
             }
 
             // Clic en la grilla para seleccionar celdas
-            if (y > OFFSET_Y && y < OFFSET_Y + ROWS * CELL_H && x > OFFSET_X && x < OFFSET_X + COLS * CELL_W) {
+            if (y > OFFSET_Y && y < window.getSize().y - 40 && x > OFFSET_X && x < window.getSize().x) {
                 if (event.mouseButton.button == sf::Mouse::Left) {
                     isDragging = true;
-                    selectedStartCol = (x - OFFSET_X) / CELL_W;
-                    selectedStartRow = (y - OFFSET_Y) / CELL_H;
+                    // Agregar scroll a las coordenadas del mouse
+                    selectedStartCol = (x - OFFSET_X + scrollX) / CELL_W;
+                    selectedStartRow = (y - OFFSET_Y + scrollY) / CELL_H;
                     selectedEndCol = selectedStartCol;
                     selectedEndRow = selectedStartRow;
 
+                    if (selectedStartCol >= COLS) selectedStartCol = COLS - 1;
+                    if (selectedStartRow >= ROWS) selectedStartRow = ROWS - 1;
+                    if (selectedStartCol < 0) selectedStartCol = 0;
+                    if (selectedStartRow < 0) selectedStartRow = 0;
+
                     // Update inputCell or inputRange
-                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
+                    std::string cLabel = "";
+                    int tempC = selectedStartCol;
+                    while (tempC >= 0) { cLabel = char('A' + (tempC % 26)) + cLabel; tempC = tempC / 26 - 1; }
+
+                    inputCell = cLabel + std::to_string(selectedStartRow + 1);
                     inputRange = inputCell + ":" + inputCell;
 
                     // Cambiar el foco al campo de valor para poder escribir directamente
@@ -183,13 +193,29 @@ void GUI::handleEvents() {
             if (isDragging) {
                 int x = event.mouseMove.x;
                 int y = event.mouseMove.y;
-                if (y > OFFSET_Y && y < OFFSET_Y + ROWS * CELL_H && x > OFFSET_X && x < OFFSET_X + COLS * CELL_W) {
-                    selectedEndCol = (x - OFFSET_X) / CELL_W;
-                    selectedEndRow = (y - OFFSET_Y) / CELL_H;
+                if (y > OFFSET_Y && y < window.getSize().y - 40 && x > OFFSET_X && x < window.getSize().x) {
+                    int endCol = (x - OFFSET_X + scrollX) / CELL_W;
+                    int endRow = (y - OFFSET_Y + scrollY) / CELL_H;
 
-                    std::string startCell = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
-                    std::string endCell = std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
-                    inputRange = startCell + ":" + endCell;
+                    if (endCol >= COLS) endCol = COLS - 1;
+                    if (endRow >= ROWS) endRow = ROWS - 1;
+                    if (endCol < 0) endCol = 0;
+                    if (endRow < 0) endRow = 0;
+
+                    selectedEndCol = endCol;
+                    selectedEndRow = endRow;
+
+                    std::string startCell = "";
+                    int tempC1 = std::min(selectedStartCol, selectedEndCol);
+                    while (tempC1 >= 0) { startCell = char('A' + (tempC1 % 26)) + startCell; tempC1 = tempC1 / 26 - 1; }
+                    startCell += std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
+
+                    std::string endCellStr = "";
+                    int tempC2 = std::max(selectedStartCol, selectedEndCol);
+                    while (tempC2 >= 0) { endCellStr = char('A' + (tempC2 % 26)) + endCellStr; tempC2 = tempC2 / 26 - 1; }
+                    endCellStr += std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
+
+                    inputRange = startCell + ":" + endCellStr;
                 }
             }
         }
@@ -198,6 +224,28 @@ void GUI::handleEvents() {
             if (event.mouseButton.button == sf::Mouse::Left) {
                 isDragging = false;
             }
+        }
+
+        if (event.type == sf::Event::MouseWheelScrolled) {
+            if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+                // Determine if Shift is pressed for horizontal scroll
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift)) {
+                    scrollX -= event.mouseWheelScroll.delta * 20;
+                } else {
+                    scrollY -= event.mouseWheelScroll.delta * 20;
+                }
+            } else if (event.mouseWheelScroll.wheel == sf::Mouse::HorizontalWheel) {
+                scrollX -= event.mouseWheelScroll.delta * 20;
+            }
+
+            // Clamp scrolling
+            float maxScrollX = std::max(0.0f, (float)(COLS * CELL_W) - (window.getSize().x - OFFSET_X));
+            float maxScrollY = std::max(0.0f, (float)(ROWS * CELL_H) - (window.getSize().y - OFFSET_Y - 40));
+
+            if (scrollX < 0) scrollX = 0;
+            if (scrollX > maxScrollX) scrollX = maxScrollX;
+            if (scrollY < 0) scrollY = 0;
+            if (scrollY > maxScrollY) scrollY = maxScrollY;
         }
     }
 }
@@ -215,27 +263,43 @@ void GUI::drawGrid() {
 
     // Header de columnas (A, B, C, ...)
     for (int c = 0; c < COLS; c++) {
-        std::string label(1, char('A' + c));
-        float x = OFFSET_X + c * CELL_W;
-        auto rect = makeRect(x, OFFSET_Y - CELL_H, CELL_W, CELL_H,
-                             sf::Color(200, 200, 220));
-        window.draw(rect);
-        window.draw(makeText(label, x + CELL_W/2 - 5, OFFSET_Y - CELL_H + 7));
+        std::string label = "";
+        int tempC = c;
+        while (tempC >= 0) {
+            label = char('A' + (tempC % 26)) + label;
+            tempC = tempC / 26 - 1;
+        }
+
+        float x = OFFSET_X + c * CELL_W - scrollX;
+
+        // Solo dibujar si está al menos parcialmente visible en la pantalla
+        if (x + CELL_W > OFFSET_X && x < window.getSize().x) {
+            auto rect = makeRect(x, OFFSET_Y - CELL_H, CELL_W, CELL_H,
+                                 sf::Color(200, 200, 220));
+            window.draw(rect);
+            window.draw(makeText(label, x + CELL_W/2 - 5, OFFSET_Y - CELL_H + 7));
+        }
     }
 
     // Header de filas (1, 2, 3, ...)
     for (int r = 0; r < ROWS; r++) {
-        float y = OFFSET_Y + r * CELL_H;
-        auto rect = makeRect(0, y, OFFSET_X, CELL_H, sf::Color(200, 200, 220));
-        window.draw(rect);
-        window.draw(makeText(std::to_string(r + 1), 5, y + 7));
+        float y = OFFSET_Y + r * CELL_H - scrollY;
+        if (y + CELL_H > OFFSET_Y && y < window.getSize().y - 40) { // 40 es el tamaño aproximado del panel inferior
+            auto rect = makeRect(0, y, OFFSET_X, CELL_H, sf::Color(200, 200, 220));
+            window.draw(rect);
+            window.draw(makeText(std::to_string(r + 1), 5, y + 7));
+        }
     }
 
     // Celdas
     for (int r = 0; r < ROWS; r++) {
+        float y = OFFSET_Y + r * CELL_H - scrollY;
+        if (y + CELL_H <= OFFSET_Y || y >= window.getSize().y - 40) continue; // Culling vertical
+
         for (int c = 0; c < COLS; c++) {
-            float x = OFFSET_X + c * CELL_W;
-            float y = OFFSET_Y + r * CELL_H;
+            float x = OFFSET_X + c * CELL_W - scrollX;
+            if (x + CELL_W <= OFFSET_X || x >= window.getSize().x) continue; // Culling horizontal
+
             auto key = std::make_pair(r, c);
 
             bool hasValue = occupied.count(key);
@@ -263,6 +327,10 @@ void GUI::drawGrid() {
             }
         }
     }
+
+    // Tapamos el área de los headers para que no se superpongan las celdas y filas al scrollear
+    auto topCover = makeRect(0, 0, OFFSET_X, OFFSET_Y, sf::Color(230, 230, 240), sf::Color::Transparent);
+    window.draw(topCover);
 }
 
 void GUI::drawTopPanel() {
@@ -345,10 +413,7 @@ void GUI::executeInsert() {
                         result = sheet.minRange(r1, c1, r2, c2);
                     }
 
-                    valueToInsert = std::to_string(result);
-                    // Quitar los decimales extra:
-                    valueToInsert.erase(valueToInsert.find_last_not_of('0') + 1, std::string::npos);
-                    if (valueToInsert.back() == '.') valueToInsert.pop_back();
+                    valueToInsert = formatDouble(result);
                 } else {
                     // Evaluar suma de celdas simples separadas por + (ej: =A1+B2)
                     statusMsg = "Error en formato de fórmula"; return;
@@ -376,9 +441,7 @@ void GUI::executeInsert() {
                 }
             }
             if (valid) {
-                valueToInsert = std::to_string(totalSum);
-                valueToInsert.erase(valueToInsert.find_last_not_of('0') + 1, std::string::npos);
-                if (valueToInsert.back() == '.') valueToInsert.pop_back();
+                valueToInsert = formatDouble(totalSum);
             } else {
                 statusMsg = "Error sumando celdas: " + formula; return;
             }
@@ -422,7 +485,7 @@ void GUI::executeAggregation(const std::string& op) {
         else if (op == "PROMEDIO") result = sheet.avgRange(r1,c1,r2,c2);
         else if (op == "MAX")      result = sheet.maxRange(r1,c1,r2,c2);
         else if (op == "MIN")      result = sheet.minRange(r1,c1,r2,c2);
-        statusMsg = op + "(" + inputRange + ") = " + std::to_string(result);
+        statusMsg = op + "(" + inputRange + ") = " + formatDouble(result);
     }
     // Si no hay rango, intentar con celda/fila/columna
     else {
@@ -432,7 +495,7 @@ void GUI::executeAggregation(const std::string& op) {
         else if (op == "PROMEDIO") result = sheet.avgRange(r,0,r,COLS-1);
         else if (op == "MAX")      result = sheet.maxRange(r,0,r,COLS-1);
         else if (op == "MIN")      result = sheet.minRange(r,0,r,COLS-1);
-        statusMsg = op + "(fila " + std::to_string(r+1) + ") = " + std::to_string(result);
+        statusMsg = op + "(fila " + std::to_string(r+1) + ") = " + formatDouble(result);
     }
 }
 
@@ -458,6 +521,15 @@ bool GUI::parseRange(const std::string& ref, int& r1, int& c1, int& r2, int& c2)
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────
+std::string GUI::formatDouble(double value) {
+    std::string str = std::to_string(value);
+    str.erase(str.find_last_not_of('0') + 1, std::string::npos);
+    if (!str.empty() && str.back() == '.') {
+        str.pop_back();
+    }
+    return str;
+}
+
 sf::Text GUI::makeText(const std::string& str, float x, float y,
                        unsigned size, sf::Color color) {
     sf::Text t;

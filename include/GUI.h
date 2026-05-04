@@ -15,8 +15,8 @@ private:
     sf::Font font;
 
     // ── Grilla ────────────────────────────────────────────────
-    static const int COLS       = 10;
-    static const int ROWS       = 20;
+    static const int COLS       = 40;
+    static const int ROWS       = 200;
     static const int CELL_W     = 90;
     static const int CELL_H     = 30;
     static const int OFFSET_X   = 40;  // espacio para headers de fila
@@ -31,6 +31,10 @@ private:
     bool focusCell  = true;  // true = foco en inputCell
     bool focusValue = false;
     bool focusRange = false;
+
+    // ── Scrolling ─────────────────────────────────────────────
+    float scrollX = 0.0f;
+    float scrollY = 0.0f;
 
     // ── Selección con el mouse ────────────────────────────────
     int selectedStartRow = -1;
@@ -51,6 +55,9 @@ private:
     void executeDelete();
     void executeQuery();
     void executeAggregation(const std::string& op);
+
+    // Formatear números sin ceros extra
+    std::string formatDouble(double value);
 
     // Convierte "B3" → (row=2, col=1)
     bool parseCell(const std::string& ref, int& row, int& col);
