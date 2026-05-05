@@ -1,537 +1,835 @@
 #include "GUI.h"
-#include <sstream>
-#include <cctype>
+#include "CellRef.h"
+#include "FormulaEvaluator.h"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <sstream>
 
-// ─────────────────────────────────────────────────────────────
+namespace {
+
+std::string trimStr(const std::string& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) a++;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) b--;
+    return s.substr(a, b - a);
+}
+
+} // namespace
+
 GUI::GUI(SparseMatrix& matrix)
     : sheet(matrix),
-      window(sf::VideoMode(OFFSET_X + COLS * CELL_W + 20, OFFSET_Y + ROWS * CELL_H + 120),
-             "Hoja de Calculo - Sparse Matrix")
-{
+      window(sf::VideoMode(1280, 720),
+             "Hoja de calculo"),
+      colWidths(COLS, DEFAULT_COL_W) {
     window.setFramerateLimit(60);
     if (!font.loadFromFile("arial.ttf"))
         throw std::runtime_error("No se pudo cargar arial.ttf");
 }
 
-// ─── RUN LOOP ─────────────────────────────────────────────────
+int GUI::totalGridWidth() const {
+    int t = 0;
+    for (int w : colWidths) t += w;
+    return t;
+}
+
+int GUI::colOffsetPixel(int col) const {
+    int acc = 0;
+    for (int c = 0; c < col && c < COLS; c++) acc += colWidths[c];
+    return acc;
+}
+
+int GUI::pickColumnFromX(float gx, float& edgeDist) const {
+    int acc = 0;
+    for (int c = 0; c < COLS; c++) {
+        int w = colWidths[c];
+        if (gx < acc + w) {
+            edgeDist = static_cast<float>(acc + w - gx);
+            return c;
+        }
+        acc += w;
+    }
+    edgeDist = 0.f;
+    return COLS - 1;
+}
+
+int GUI::pickRowFromY(float gy) const {
+    if (gy < 0) return 0;
+    int r = static_cast<int>(gy / CELL_H);
+    if (r < 0) r = 0;
+    if (r >= ROWS) r = ROWS - 1;
+    return r;
+}
+
+void GUI::clampScroll() {
+    float maxScrollX = std::max(0.f, static_cast<float>(totalGridWidth()) -
+                                         (window.getSize().x - ROW_HEADER_W - 20));
+    float maxScrollY =
+        std::max(0.f, static_cast<float>(ROWS * CELL_H) - (window.getSize().y - gridTop() - STATUS_H));
+    if (scrollX < 0) scrollX = 0;
+    if (scrollX > maxScrollX) scrollX = maxScrollX;
+    if (scrollY < 0) scrollY = 0;
+    if (scrollY > maxScrollY) scrollY = maxScrollY;
+}
+
+void GUI::pushUndo() {
+    undoStack.push_back(sheet.snapshotCells());
+    if (undoStack.size() > MAX_UNDO) undoStack.pop_front();
+    redoStack.clear();
+}
+
+void GUI::undo() {
+    if (undoStack.empty()) return;
+    redoStack.push_back(sheet.snapshotCells());
+    sheet.restoreSnapshot(undoStack.back());
+    undoStack.pop_back();
+    formulaDirty = false;
+    loadFormulaBarFromActiveCell();
+    statusMsg = "Deshacer";
+}
+
+void GUI::redo() {
+    if (redoStack.empty()) return;
+    undoStack.push_back(sheet.snapshotCells());
+    sheet.restoreSnapshot(redoStack.back());
+    redoStack.pop_back();
+    formulaDirty = false;
+    loadFormulaBarFromActiveCell();
+    statusMsg = "Rehacer";
+}
+
+void GUI::syncNameBoxFromSelection() {
+    if (selR1 < 0 || selC1 < 0) {
+        nameBoxText = "";
+        return;
+    }
+    int loR = std::min(selR1, selR2);
+    int hiR = std::max(selR1, selR2);
+    int loC = std::min(selC1, selC2);
+    int hiC = std::max(selC1, selC2);
+    std::string a = cellref::colIndexToLetters(loC) + std::to_string(loR + 1);
+    if (loR == hiR && loC == hiC) {
+        nameBoxText = a;
+        return;
+    }
+    std::string b = cellref::colIndexToLetters(hiC) + std::to_string(hiR + 1);
+    nameBoxText = a + ":" + b;
+}
+
+void GUI::loadFormulaBarFromActiveCell() {
+    formulaBar = sheet.query(activeRow, activeCol);
+    formulaDirty = false;
+}
+
+void GUI::cancelEdit() {
+    loadFormulaBarFromActiveCell();
+    statusMsg = "Edicion cancelada";
+}
+
+void GUI::commitActiveCell() {
+    pushUndo();
+    sheet.insert(activeRow, activeCol, formulaBar);
+    formulaDirty = false;
+    statusMsg = "Guardado " + cellref::colIndexToLetters(activeCol) + std::to_string(activeRow + 1);
+}
+
+void GUI::navigateNameBoxToCell() {
+    int r = 0, c = 0;
+    std::string t = trimStr(nameBoxText);
+    if (t.find(':') != std::string::npos) {
+        int r1, c1, r2, c2;
+        if (!parseRangeInput(t, r1, c1, r2, c2)) {
+            statusMsg = "Rango invalido en cuadro de nombre";
+            return;
+        }
+        selR1 = r1;
+        selC1 = c1;
+        selR2 = r2;
+        selC2 = c2;
+        activeRow = anchorRow = r1;
+        activeCol = anchorCol = c1;
+    } else {
+        if (!parseCellInput(t, r, c)) {
+            statusMsg = "Celda invalida en cuadro de nombre";
+            return;
+        }
+        selR1 = selR2 = activeRow = anchorRow = r;
+        selC1 = selC2 = activeCol = anchorCol = c;
+    }
+    syncNameBoxFromSelection();
+    loadFormulaBarFromActiveCell();
+    focusFormula = true;
+    focusNameBox = false;
+    statusMsg = "Seleccion actualizada";
+}
+
+bool GUI::parseCellInput(const std::string& ref, int& row, int& col) {
+    return cellref::parseCellRef(trimStr(ref), row, col);
+}
+
+bool GUI::parseRangeInput(const std::string& ref, int& r1, int& c1, int& r2, int& c2) {
+    return cellref::parseRangeRef(trimStr(ref), r1, c1, r2, c2);
+}
+
+std::string GUI::formatCellDisplay(int row, int col) const {
+    std::string d = FormulaEvaluator::cellDisplay(sheet, row, col);
+    if (d.empty()) return "";
+    if (!d.empty() && d[0] == '#') return d;
+    return applyThousands(d);
+}
+
+std::string GUI::applyThousands(const std::string& numericDisplay) {
+    if (numericDisplay.empty() || numericDisplay[0] == '#') return numericDisplay;
+    bool neg = false;
+    size_t start = 0;
+    if (numericDisplay[0] == '-') {
+        neg = true;
+        start = 1;
+    }
+    size_t dotPos = numericDisplay.find('.', start);
+    std::string intPart =
+        dotPos == std::string::npos ? numericDisplay.substr(start) : numericDisplay.substr(start, dotPos - start);
+    std::string frac = dotPos == std::string::npos ? "" : numericDisplay.substr(dotPos);
+    if (intPart.empty()) return numericDisplay;
+    for (char ch : intPart)
+        if (!std::isdigit(static_cast<unsigned char>(ch))) return numericDisplay;
+
+    std::string out;
+    int count = 0;
+    for (int k = static_cast<int>(intPart.size()) - 1; k >= 0; k--) {
+        if (count && count % 3 == 0) out.push_back(',');
+        out.push_back(intPart[static_cast<size_t>(k)]);
+        count++;
+    }
+    std::reverse(out.begin(), out.end());
+    if (neg) out = "-" + out;
+    return out + frac;
+}
+
+void GUI::executeDeleteSelection() {
+    if (selR1 < 0) return;
+    pushUndo();
+    int loR = std::min(selR1, selR2);
+    int hiR = std::max(selR1, selR2);
+    int loC = std::min(selC1, selC2);
+    int hiC = std::max(selC1, selC2);
+    sheet.deleteRange(loR, loC, hiR, hiC);
+    loadFormulaBarFromActiveCell();
+    statusMsg = "Celdas eliminadas";
+}
+
+void GUI::executeAggregation(const std::string& op) {
+    if (selR1 < 0) return;
+    int loR = std::min(selR1, selR2);
+    int hiR = std::max(selR1, selR2);
+    int loC = std::min(selC1, selC2);
+    int hiC = std::max(selC1, selC2);
+    double result = 0;
+    if (op == "SUMA")
+        result = FormulaEvaluator::aggregateSum(sheet, loR, loC, hiR, hiC);
+    else if (op == "PROMEDIO")
+        result = FormulaEvaluator::aggregateAvg(sheet, loR, loC, hiR, hiC);
+    else if (op == "MAX")
+        result = FormulaEvaluator::aggregateMax(sheet, loR, loC, hiR, hiC);
+    else if (op == "MIN")
+        result = FormulaEvaluator::aggregateMin(sheet, loR, loC, hiR, hiC);
+    else if (op == "CONTAR")
+        result = FormulaEvaluator::aggregateCount(sheet, loR, loC, hiR, hiC);
+    else
+        return;
+    statusMsg = op + " = " + FormulaEvaluator::formatNumber(result);
+}
+
+void GUI::copySelectionToClipboard() {
+    if (selR1 < 0) return;
+    int loR = std::min(selR1, selR2);
+    int hiR = std::max(selR1, selR2);
+    int loC = std::min(selC1, selC2);
+    int hiC = std::max(selC1, selC2);
+    std::ostringstream oss;
+    for (int r = loR; r <= hiR; r++) {
+        for (int c = loC; c <= hiC; c++) {
+            if (c > loC) oss << '\t';
+            oss << sheet.query(r, c);
+        }
+        if (r < hiR) oss << '\n';
+    }
+    sf::Clipboard::setString(oss.str());
+    statusMsg = "Copiado al portapapeles";
+}
+
+void GUI::pasteFromClipboard() {
+    std::string clip = sf::Clipboard::getString();
+    if (clip.empty() || selR1 < 0) return;
+    pushUndo();
+    int startR = activeRow;
+    int startC = activeCol;
+    std::istringstream iss(clip);
+    std::string line;
+    int dr = 0;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::stringstream ls(line);
+        std::string cell;
+        int dc = 0;
+        while (std::getline(ls, cell, '\t')) {
+            int r = startR + dr;
+            int c = startC + dc;
+            if (r < ROWS && c < COLS) sheet.insert(r, c, cell);
+            dc++;
+        }
+        dr++;
+    }
+    statusMsg = "Pegado";
+}
+
+void GUI::applyFill(int endRow, int endCol) {
+    if (selR1 < 0) return;
+    int selLoR = std::min(selR1, selR2);
+    int selHiR = std::max(selR1, selR2);
+    int selLoC = std::min(selC1, selC2);
+    int selHiC = std::max(selC1, selC2);
+    int patH = selHiR - selLoR + 1;
+    int patW = selHiC - selLoC + 1;
+
+    int destR1 = std::min({selLoR, selHiR, endRow});
+    int destR2 = std::max({selLoR, selHiR, endRow});
+    int destC1 = std::min({selLoC, selHiC, endCol});
+    int destC2 = std::max({selLoC, selHiC, endCol});
+
+    pushUndo();
+    for (int r = destR1; r <= destR2; r++) {
+        for (int c = destC1; c <= destC2; c++) {
+            int sr = selLoR + ((r - selLoR) % patH + patH) % patH;
+            int sc = selLoC + ((c - selLoC) % patW + patW) % patW;
+            std::string raw = sheet.query(sr, sc);
+            if (raw.empty()) continue;
+            std::string out;
+            if (raw[0] == '=')
+                out = "=" + cellref::shiftFormulaRefs(raw.substr(1), r - sr, c - sc);
+            else
+                out = raw;
+            sheet.insert(r, c, out);
+        }
+    }
+    statusMsg = "Relleno aplicado";
+}
+
 void GUI::run() {
     while (window.isOpen()) {
         handleEvents();
         window.clear(sf::Color(245, 245, 245));
         drawGrid();
         drawTopPanel();
-        drawBottomPanel();
+        drawFillHandle();
+        drawStatusBar();
         window.display();
     }
 }
 
-// ─── EVENTOS ──────────────────────────────────────────────────
 void GUI::handleEvents() {
     sf::Event event;
     while (window.pollEvent(event)) {
-
         if (event.type == sf::Event::Closed)
             window.close();
 
+        bool cmd =
+            sf::Keyboard::isKeyPressed(sf::Keyboard::LSystem) ||
+            sf::Keyboard::isKeyPressed(sf::Keyboard::RSystem) ||
+            sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) ||
+            sf::Keyboard::isKeyPressed(sf::Keyboard::RControl);
+
         if (event.type == sf::Event::KeyPressed) {
-            // Tab para cambiar foco entre campos
+            if (cmd && event.key.code == sf::Keyboard::Z) {
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::RShift))
+                    redo();
+                else
+                    undo();
+                continue;
+            }
+            if (cmd && event.key.code == sf::Keyboard::Y) {
+                redo();
+                continue;
+            }
+            if (cmd && event.key.code == sf::Keyboard::C) {
+                copySelectionToClipboard();
+                continue;
+            }
+            if (cmd && event.key.code == sf::Keyboard::V) {
+                pasteFromClipboard();
+                continue;
+            }
+            if (cmd && event.key.code == sf::Keyboard::X) {
+                copySelectionToClipboard();
+                executeDeleteSelection();
+                continue;
+            }
+
+            if (event.key.code == sf::Keyboard::Escape) {
+                cancelEdit();
+                continue;
+            }
+
             if (event.key.code == sf::Keyboard::Tab) {
-                if      (focusCell)  { focusCell=false; focusValue=true;  focusRange=false; }
-                else if (focusValue) { focusCell=false; focusValue=false; focusRange=true;  }
-                else                 { focusCell=true;  focusValue=false; focusRange=false; }
-            }
-            // Backspace y Delete
-            if (event.key.code == sf::Keyboard::BackSpace) {
-                if (focusCell  && !inputCell.empty())  inputCell.pop_back();
-                else if (focusValue && !inputValue.empty()) inputValue.pop_back();
-                else if (focusRange && !inputRange.empty()) inputRange.pop_back();
-                else if (focusValue && inputValue.empty()) {
-                    executeDelete(); // Si presiona borrar y el campo ya está vacío, borra la celda/rango de la grilla
+                if (focusNameBox) {
+                    focusNameBox = false;
+                    focusFormula = true;
+                } else if (focusFormula) {
+                    commitActiveCell();
+                    if (activeCol < COLS - 1)
+                        activeCol++;
+                    else {
+                        activeCol = 0;
+                        if (activeRow < ROWS - 1) activeRow++;
+                    }
+                    selR1 = selR2 = activeRow = anchorRow;
+                    selC1 = selC2 = activeCol = anchorCol;
+                    syncNameBoxFromSelection();
+                    loadFormulaBarFromActiveCell();
                 }
+                continue;
             }
 
-            if (event.key.code == sf::Keyboard::Delete) {
-                executeDelete();
-                inputValue = "";
+            if (event.key.code == sf::Keyboard::Enter) {
+                if (focusNameBox) {
+                    navigateNameBoxToCell();
+                } else {
+                    commitActiveCell();
+                    if (activeRow < ROWS - 1) activeRow++;
+                    anchorRow = activeRow;
+                    anchorCol = activeCol;
+                    selR1 = selR2 = activeRow;
+                    selC1 = selC2 = activeCol;
+                    syncNameBoxFromSelection();
+                    loadFormulaBarFromActiveCell();
+                }
+                continue;
             }
 
-            // Moverse con las flechas del teclado
+            if (event.key.code == sf::Keyboard::F2) {
+                focusFormula = true;
+                focusNameBox = false;
+                continue;
+            }
+
             if (event.key.code == sf::Keyboard::Up || event.key.code == sf::Keyboard::Down ||
                 event.key.code == sf::Keyboard::Left || event.key.code == sf::Keyboard::Right) {
-
-                bool shiftPressed = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
-
-                if (selectedStartRow == -1 || selectedStartCol == -1) {
-                    selectedStartRow = 0; selectedStartCol = 0;
-                    selectedEndRow = 0; selectedEndCol = 0;
-                } else {
-                    int& tr = shiftPressed ? selectedEndRow : selectedStartRow;
-                    int& tc = shiftPressed ? selectedEndCol : selectedStartCol;
-
-                    if (event.key.code == sf::Keyboard::Up && tr > 0) tr--;
-                    if (event.key.code == sf::Keyboard::Down && tr < ROWS - 1) tr++;
-                    if (event.key.code == sf::Keyboard::Left && tc > 0) tc--;
-                    if (event.key.code == sf::Keyboard::Right && tc < COLS - 1) tc++;
-
-                    if (!shiftPressed) {
-                        selectedEndRow = selectedStartRow;
-                        selectedEndCol = selectedStartCol;
-                    }
+                bool shift = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                             sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+                if (selR1 < 0) {
+                    selR1 = selR2 = activeRow = anchorRow = 0;
+                    selC1 = selC2 = activeCol = anchorCol = 0;
                 }
+                int dr = 0, dc = 0;
+                if (event.key.code == sf::Keyboard::Up) dr = -1;
+                if (event.key.code == sf::Keyboard::Down) dr = 1;
+                if (event.key.code == sf::Keyboard::Left) dc = -1;
+                if (event.key.code == sf::Keyboard::Right) dc = 1;
 
-                std::string startCell = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
-                std::string endCell = std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
-                inputRange = startCell + ":" + endCell;
-
-                // inputCell se mantiene en su ancla o en la celda normal
-                inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
-
-                focusCell = false;
-                focusValue = true;
-                focusRange = false;
-                inputValue = "";
+                if (!shift) {
+                    int nr = activeRow + dr;
+                    int nc = activeCol + dc;
+                    nr = std::max(0, std::min(ROWS - 1, nr));
+                    nc = std::max(0, std::min(COLS - 1, nc));
+                    activeRow = anchorRow = selR1 = selR2 = nr;
+                    activeCol = anchorCol = selC1 = selC2 = nc;
+                } else {
+                    selR1 = anchorRow;
+                    selC1 = anchorCol;
+                    int nr = selR2 + dr;
+                    int nc = selC2 + dc;
+                    nr = std::max(0, std::min(ROWS - 1, nr));
+                    nc = std::max(0, std::min(COLS - 1, nc));
+                    selR2 = nr;
+                    selC2 = nc;
+                    activeRow = anchorRow;
+                    activeCol = anchorCol;
+                }
+                syncNameBoxFromSelection();
+                loadFormulaBarFromActiveCell();
+                continue;
             }
 
-            // Tecla Enter para insertar el valor en la celda
-            if (event.key.code == sf::Keyboard::Enter) {
-                if (inputValue.empty()) {
-                    executeDelete(); // Si da Enter con el campo vacío, se borra el contenido
-                } else {
-                    executeInsert();
+            if (event.key.code == sf::Keyboard::Delete || event.key.code == sf::Keyboard::BackSpace) {
+                if (focusFormula && event.key.code == sf::Keyboard::BackSpace &&
+                    !formulaBar.empty()) {
+                    formulaBar.pop_back();
+                    formulaDirty = true;
+                } else if (focusFormula && event.key.code == sf::Keyboard::BackSpace &&
+                           formulaBar.empty()) {
+                    executeDeleteSelection();
+                } else if (event.key.code == sf::Keyboard::Delete) {
+                    executeDeleteSelection();
                 }
-
-                // Mover a la celda de abajo
-                if (selectedStartRow != -1 && selectedStartCol != -1) {
-                    if (selectedStartRow < ROWS - 1) {
-                        selectedStartRow++;
-                    }
-                    selectedEndRow = selectedStartRow;
-                    selectedEndCol = selectedStartCol;
-
-                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
-                    inputRange = inputCell + ":" + inputCell;
-
-                    focusCell = false;
-                    focusValue = true;
-                    focusRange = false;
-                    inputValue = ""; // Limpiar valor para la nueva celda
-                }
+                continue;
             }
 
-            // Comandos con Ctrl + P (o Cmd + P en Mac)
-            if (event.key.code == sf::Keyboard::P &&
-               (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::RControl) ||
-                sf::Keyboard::isKeyPressed(sf::Keyboard::LSystem) || sf::Keyboard::isKeyPressed(sf::Keyboard::RSystem))) {
-                // Remove buttons functionality and trigger command palette or action
-                // For demonstration, let's say it triggers "Consultar" if a cell is selected.
-                if (selectedStartRow != -1 && selectedStartCol != -1 && selectedStartRow == selectedEndRow && selectedStartCol == selectedEndCol) {
-                    inputCell = std::string(1, 'A' + selectedStartCol) + std::to_string(selectedStartRow + 1);
-                    executeQuery();
-                } else if (selectedStartRow != -1 && selectedStartCol != -1) {
-                    inputRange = std::string(1, 'A' + std::min(selectedStartCol, selectedEndCol)) + std::to_string(std::min(selectedStartRow, selectedEndRow) + 1) + ":" +
-                                 std::string(1, 'A' + std::max(selectedStartCol, selectedEndCol)) + std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
-                    executeAggregation("SUMA"); // Default action for range
-                }
+            if (event.key.code == sf::Keyboard::P && cmd) {
+                if (selR1 >= 0 && selR1 == selR2 && selC1 == selC2)
+                    statusMsg = formatCellDisplay(selR1, selC1);
+                else if (selR1 >= 0)
+                    executeAggregation("SUMA");
+                continue;
             }
         }
 
         if (event.type == sf::Event::TextEntered) {
             char c = static_cast<char>(event.text.unicode);
-            if (c >= 32 && c < 127) { // caracteres imprimibles
-                if (focusCell)  inputCell  += c;
-                if (focusValue) inputValue += c;
-                if (focusRange) inputRange += c;
-            }
-        }
-
-        // Clic en botones
-        if (event.type == sf::Event::MouseButtonPressed) {
-            sf::Vector2i pos = sf::Mouse::getPosition(window);
-            int x = pos.x, y = pos.y;
-
-            // Foco en campos de texto (panel superior)
-            if (y > 10 && y < 40) {
-                if (x > 70  && x < 230) { focusCell=true;  focusValue=false; focusRange=false; }
-                if (x > 290 && x < 450) { focusCell=false; focusValue=true;  focusRange=false; }
-                if (x > 510 && x < 670) { focusCell=false; focusValue=false; focusRange=true;  }
-            }
-
-            // Clic en la grilla para seleccionar celdas
-            if (y > OFFSET_Y && y < window.getSize().y - 40 && x > OFFSET_X && x < window.getSize().x) {
-                if (event.mouseButton.button == sf::Mouse::Left) {
-                    isDragging = true;
-                    // Agregar scroll a las coordenadas del mouse
-                    selectedStartCol = (x - OFFSET_X + scrollX) / CELL_W;
-                    selectedStartRow = (y - OFFSET_Y + scrollY) / CELL_H;
-                    selectedEndCol = selectedStartCol;
-                    selectedEndRow = selectedStartRow;
-
-                    if (selectedStartCol >= COLS) selectedStartCol = COLS - 1;
-                    if (selectedStartRow >= ROWS) selectedStartRow = ROWS - 1;
-                    if (selectedStartCol < 0) selectedStartCol = 0;
-                    if (selectedStartRow < 0) selectedStartRow = 0;
-
-                    // Update inputCell or inputRange
-                    std::string cLabel = "";
-                    int tempC = selectedStartCol;
-                    while (tempC >= 0) { cLabel = char('A' + (tempC % 26)) + cLabel; tempC = tempC / 26 - 1; }
-
-                    inputCell = cLabel + std::to_string(selectedStartRow + 1);
-                    inputRange = inputCell + ":" + inputCell;
-
-                    // Cambiar el foco al campo de valor para poder escribir directamente
-                    focusCell = false;
-                    focusValue = true;
-                    focusRange = false;
-                    inputValue = ""; // Opcional: limpiar el valor anterior al elegir nueva celda
+            if (c >= 32 && c < 127) {
+                if (focusNameBox)
+                    nameBoxText.push_back(c);
+                else {
+                    focusFormula = true;
+                    formulaBar.push_back(c);
+                    formulaDirty = true;
                 }
             }
         }
 
+        if (event.type == sf::Event::MouseButtonPressed) {
+            sf::Vector2i mp = sf::Mouse::getPosition(window);
+            float mx = static_cast<float>(mp.x);
+            float my = static_cast<float>(mp.y);
+
+            sf::FloatRect nameRect(58.f, 18.f, 140.f, 28.f);
+            sf::FloatRect fxRect(210.f, 18.f, static_cast<float>(window.getSize().x) - 230.f, 28.f);
+
+            if (my < TOP_PANEL_H) {
+                if (nameRect.contains(mx, my)) {
+                    focusNameBox = true;
+                    focusFormula = false;
+                } else if (fxRect.contains(mx, my)) {
+                    focusNameBox = false;
+                    focusFormula = true;
+                }
+                continue;
+            }
+
+            // Column resize on header row
+            if (my >= TOP_PANEL_H && my < gridTop() && mx >= ROW_HEADER_W) {
+                float gx = mx - ROW_HEADER_W + scrollX;
+                float edge = 0.f;
+                int col = pickColumnFromX(gx, edge);
+                if (edge >= 0 && edge <= 6.f && col >= 0) {
+                    resizeColIndex = col;
+                    resizeStartMouseX = mx;
+                    resizeStartWidth = colWidths[col];
+                    continue;
+                }
+            }
+
+            // Row header -> select row
+            if (mx < ROW_HEADER_W && my >= gridTop()) {
+                float gy = my - gridTop() + scrollY;
+                int r = pickRowFromY(gy);
+                clickHadShift =
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+                if (!clickHadShift) {
+                    selR1 = selR2 = activeRow = anchorRow = r;
+                    selC1 = 0;
+                    selC2 = COLS - 1;
+                    activeCol = anchorCol = 0;
+                } else {
+                    selR2 = r;
+                    activeRow = anchorRow;
+                    activeCol = anchorCol;
+                }
+                syncNameBoxFromSelection();
+                loadFormulaBarFromActiveCell();
+                focusFormula = true;
+                continue;
+            }
+
+            // Column letter header -> select column
+            if (my >= TOP_PANEL_H && my < gridTop() && mx >= ROW_HEADER_W) {
+                float gx = mx - ROW_HEADER_W + scrollX;
+                float edge = 0.f;
+                int c = pickColumnFromX(gx, edge);
+                clickHadShift =
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+                if (!clickHadShift) {
+                    selC1 = selC2 = activeCol = anchorCol = c;
+                    selR1 = 0;
+                    selR2 = ROWS - 1;
+                    activeRow = anchorRow = 0;
+                } else {
+                    selC2 = c;
+                    activeCol = anchorCol;
+                    activeRow = anchorRow;
+                }
+                syncNameBoxFromSelection();
+                loadFormulaBarFromActiveCell();
+                focusFormula = true;
+                continue;
+            }
+
+            // Grid body
+            if (mx >= ROW_HEADER_W && my >= gridTop() &&
+                my < window.getSize().y - STATUS_H) {
+                float gx = mx - ROW_HEADER_W + scrollX;
+                float gy = my - gridTop() + scrollY;
+                float edge = 0.f;
+                int c = pickColumnFromX(gx, edge);
+                int r = pickRowFromY(gy);
+
+                // Fill handle hit
+                if (selR1 >= 0) {
+                    int loR = std::min(selR1, selR2);
+                    int hiR = std::max(selR1, selR2);
+                    int loC = std::min(selC1, selC2);
+                    int hiC = std::max(selC1, selC2);
+                    float x2 = static_cast<float>(ROW_HEADER_W + colOffsetPixel(hiC) +
+                                                    colWidths[hiC] - scrollX);
+                    float y2 = static_cast<float>(gridTop() + (hiR + 1) * CELL_H - scrollY);
+                    sf::FloatRect fh(x2 - FILL_HANDLE, y2 - FILL_HANDLE,
+                                     static_cast<float>(FILL_HANDLE + 2),
+                                     static_cast<float>(FILL_HANDLE + 2));
+                    if (fh.contains(mx, my)) {
+                        isFillDragging = true;
+                        fillEndRow = hiR;
+                        fillEndCol = hiC;
+                        continue;
+                    }
+                }
+
+                bool shift = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                             sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+
+                if (dblClickClock.getElapsedTime().asMilliseconds() < 400 &&
+                    lastClickRow == r && lastClickCol == c) {
+                    focusFormula = true;
+                    focusNameBox = false;
+                    dblClickClock.restart();
+                    lastClickRow = -1;
+                    continue;
+                }
+                dblClickClock.restart();
+                lastClickRow = r;
+                lastClickCol = c;
+
+                isDragging = true;
+                if (!shift) {
+                    selR1 = selR2 = activeRow = anchorRow = r;
+                    selC1 = selC2 = activeCol = anchorCol = c;
+                } else {
+                    selR1 = anchorRow;
+                    selC1 = anchorCol;
+                    selR2 = r;
+                    selC2 = c;
+                    activeRow = anchorRow;
+                    activeCol = anchorCol;
+                }
+                syncNameBoxFromSelection();
+                loadFormulaBarFromActiveCell();
+                focusFormula = true;
+                focusNameBox = false;
+            }
+        }
+
         if (event.type == sf::Event::MouseMoved) {
+            if (resizeColIndex >= 0) {
+                float dx = static_cast<float>(event.mouseMove.x) - resizeStartMouseX;
+                int nw = resizeStartWidth + static_cast<int>(dx);
+                if (nw < 40) nw = 40;
+                if (nw > 600) nw = 600;
+                colWidths[resizeColIndex] = nw;
+            }
             if (isDragging) {
-                int x = event.mouseMove.x;
-                int y = event.mouseMove.y;
-                if (y > OFFSET_Y && y < window.getSize().y - 40 && x > OFFSET_X && x < window.getSize().x) {
-                    int endCol = (x - OFFSET_X + scrollX) / CELL_W;
-                    int endRow = (y - OFFSET_Y + scrollY) / CELL_H;
-
-                    if (endCol >= COLS) endCol = COLS - 1;
-                    if (endRow >= ROWS) endRow = ROWS - 1;
-                    if (endCol < 0) endCol = 0;
-                    if (endRow < 0) endRow = 0;
-
-                    selectedEndCol = endCol;
-                    selectedEndRow = endRow;
-
-                    std::string startCell = "";
-                    int tempC1 = std::min(selectedStartCol, selectedEndCol);
-                    while (tempC1 >= 0) { startCell = char('A' + (tempC1 % 26)) + startCell; tempC1 = tempC1 / 26 - 1; }
-                    startCell += std::to_string(std::min(selectedStartRow, selectedEndRow) + 1);
-
-                    std::string endCellStr = "";
-                    int tempC2 = std::max(selectedStartCol, selectedEndCol);
-                    while (tempC2 >= 0) { endCellStr = char('A' + (tempC2 % 26)) + endCellStr; tempC2 = tempC2 / 26 - 1; }
-                    endCellStr += std::to_string(std::max(selectedStartRow, selectedEndRow) + 1);
-
-                    inputRange = startCell + ":" + endCellStr;
+                float mx = static_cast<float>(event.mouseMove.x);
+                float my = static_cast<float>(event.mouseMove.y);
+                if (mx >= ROW_HEADER_W && my >= gridTop()) {
+                    float gx = mx - ROW_HEADER_W + scrollX;
+                    float gy = my - gridTop() + scrollY;
+                    float edge = 0.f;
+                    selR2 = pickRowFromY(gy);
+                    selC2 = pickColumnFromX(gx, edge);
+                    syncNameBoxFromSelection();
+                }
+            }
+            if (isFillDragging) {
+                float mx = static_cast<float>(event.mouseMove.x);
+                float my = static_cast<float>(event.mouseMove.y);
+                if (mx >= ROW_HEADER_W && my >= gridTop()) {
+                    float gx = mx - ROW_HEADER_W + scrollX;
+                    float gy = my - gridTop() + scrollY;
+                    float edge = 0.f;
+                    fillEndRow = pickRowFromY(gy);
+                    fillEndCol = pickColumnFromX(gx, edge);
                 }
             }
         }
 
         if (event.type == sf::Event::MouseButtonReleased) {
             if (event.mouseButton.button == sf::Mouse::Left) {
+                if (resizeColIndex >= 0) {
+                    resizeColIndex = -1;
+                    clampScroll();
+                }
+                if (isFillDragging) {
+                    applyFill(fillEndRow, fillEndCol);
+                    isFillDragging = false;
+                }
                 isDragging = false;
             }
         }
 
         if (event.type == sf::Event::MouseWheelScrolled) {
             if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
-                // Determine if Shift is pressed for horizontal scroll
-                if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift)) {
-                    scrollX -= event.mouseWheelScroll.delta * 20;
-                } else {
-                    scrollY -= event.mouseWheelScroll.delta * 20;
-                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
+                    sf::Keyboard::isKeyPressed(sf::Keyboard::RShift))
+                    scrollX -= event.mouseWheelScroll.delta * 24.f;
+                else
+                    scrollY -= event.mouseWheelScroll.delta * 24.f;
             } else if (event.mouseWheelScroll.wheel == sf::Mouse::HorizontalWheel) {
-                scrollX -= event.mouseWheelScroll.delta * 20;
+                scrollX -= event.mouseWheelScroll.delta * 24.f;
             }
+            clampScroll();
+        }
 
-            // Clamp scrolling
-            float maxScrollX = std::max(0.0f, (float)(COLS * CELL_W) - (window.getSize().x - OFFSET_X));
-            float maxScrollY = std::max(0.0f, (float)(ROWS * CELL_H) - (window.getSize().y - OFFSET_Y - 40));
-
-            if (scrollX < 0) scrollX = 0;
-            if (scrollX > maxScrollX) scrollX = maxScrollX;
-            if (scrollY < 0) scrollY = 0;
-            if (scrollY > maxScrollY) scrollY = maxScrollY;
+        if (event.type == sf::Event::Resized) {
+            sf::FloatRect visible(0.f, 0.f, static_cast<float>(event.size.width),
+                                  static_cast<float>(event.size.height));
+            window.setView(sf::View(visible));
+            clampScroll();
         }
     }
 }
 
-// ─── RENDER ───────────────────────────────────────────────────
-void GUI::render() { /* llamado desde run() */ }
-
 void GUI::drawGrid() {
-    auto nodes = sheet.getAllNodes();
+    const float gridTopF = static_cast<float>(gridTop());
 
-    // Construir mapa rápido de celdas ocupadas
-    std::map<std::pair<int,int>, std::string> occupied;
-    for (Node* n : nodes)
-        occupied[{n->row, n->col}] = n->value;
-
-    // Header de columnas (A, B, C, ...)
+    // Headers columnas
     for (int c = 0; c < COLS; c++) {
-        std::string label = "";
-        int tempC = c;
-        while (tempC >= 0) {
-            label = char('A' + (tempC % 26)) + label;
-            tempC = tempC / 26 - 1;
-        }
-
-        float x = OFFSET_X + c * CELL_W - scrollX;
-
-        // Solo dibujar si está al menos parcialmente visible en la pantalla
-        if (x + CELL_W > OFFSET_X && x < window.getSize().x) {
-            auto rect = makeRect(x, OFFSET_Y - CELL_H, CELL_W, CELL_H,
-                                 sf::Color(200, 200, 220));
-            window.draw(rect);
-            window.draw(makeText(label, x + CELL_W/2 - 5, OFFSET_Y - CELL_H + 7));
-        }
+        float x = static_cast<float>(ROW_HEADER_W + colOffsetPixel(c)) - scrollX;
+        float w = static_cast<float>(colWidths[c]);
+        if (x + w < ROW_HEADER_W || x > window.getSize().x) continue;
+        auto rect = makeRect(x, static_cast<float>(TOP_PANEL_H), w, static_cast<float>(HEADER_COL_H),
+                              sf::Color(208, 208, 228));
+        window.draw(rect);
+        std::string lab = cellref::colIndexToLetters(c);
+        window.draw(makeText(lab, x + w * 0.35f, static_cast<float>(TOP_PANEL_H + 4), 13));
     }
 
-    // Header de filas (1, 2, 3, ...)
+    // Headers filas
     for (int r = 0; r < ROWS; r++) {
-        float y = OFFSET_Y + r * CELL_H - scrollY;
-        if (y + CELL_H > OFFSET_Y && y < window.getSize().y - 40) { // 40 es el tamaño aproximado del panel inferior
-            auto rect = makeRect(0, y, OFFSET_X, CELL_H, sf::Color(200, 200, 220));
-            window.draw(rect);
-            window.draw(makeText(std::to_string(r + 1), 5, y + 7));
-        }
+        float y = gridTopF + r * CELL_H - scrollY;
+        if (y + CELL_H < gridTopF || y > window.getSize().y) continue;
+        auto rect =
+            makeRect(0.f, y, static_cast<float>(ROW_HEADER_W), static_cast<float>(CELL_H),
+                     sf::Color(208, 208, 228));
+        window.draw(rect);
+        window.draw(makeText(std::to_string(r + 1), 6.f, y + 6.f, 12));
     }
 
     // Celdas
     for (int r = 0; r < ROWS; r++) {
-        float y = OFFSET_Y + r * CELL_H - scrollY;
-        if (y + CELL_H <= OFFSET_Y || y >= window.getSize().y - 40) continue; // Culling vertical
+        float y = gridTopF + r * CELL_H - scrollY;
+        if (y + CELL_H < gridTopF || y > window.getSize().y - STATUS_H) continue;
 
         for (int c = 0; c < COLS; c++) {
-            float x = OFFSET_X + c * CELL_W - scrollX;
-            if (x + CELL_W <= OFFSET_X || x >= window.getSize().x) continue; // Culling horizontal
+            float x = static_cast<float>(ROW_HEADER_W + colOffsetPixel(c)) - scrollX;
+            float w = static_cast<float>(colWidths[c]);
+            if (x + w < ROW_HEADER_W || x > window.getSize().x) continue;
 
-            auto key = std::make_pair(r, c);
-
-            bool hasValue = occupied.count(key);
-            sf::Color fill = hasValue ? sf::Color(220, 240, 220) : sf::Color::White;
-
-            // Highlight selected cells
-            if (selectedStartRow != -1 && selectedStartCol != -1) {
-                int minCol = std::min(selectedStartCol, selectedEndCol);
-                int maxCol = std::max(selectedStartCol, selectedEndCol);
-                int minRow = std::min(selectedStartRow, selectedEndRow);
-                int maxRow = std::max(selectedStartRow, selectedEndRow);
-
-                if (r >= minRow && r <= maxRow && c >= minCol && c <= maxCol) {
-                    fill = sf::Color(180, 200, 255); // Selection color
-                }
+            sf::Color fill(255, 255, 255);
+            if (selR1 >= 0) {
+                int loR = std::min(selR1, selR2);
+                int hiR = std::max(selR1, selR2);
+                int loC = std::min(selC1, selC2);
+                int hiC = std::max(selC1, selC2);
+                if (r >= loR && r <= hiR && c >= loC && c <= hiC)
+                    fill = sf::Color(210, 225, 255);
             }
+            if (r == activeRow && c == activeCol && selR1 >= 0)
+                fill = sf::Color(190, 210, 255);
 
-            auto rect = makeRect(x, y, CELL_W, CELL_H, fill);
-            window.draw(rect);
+            window.draw(makeRect(x, y, w, static_cast<float>(CELL_H), fill));
 
-            if (hasValue) {
-                std::string val = occupied[key];
-                if (val.size() > 10) val = val.substr(0, 9) + "~";
-                window.draw(makeText(val, x + 4, y + 7, 12));
+            std::string show = formatCellDisplay(r, c);
+            if (!show.empty()) {
+                if (show.size() > 14) show = show.substr(0, 13) + "~";
+                bool numLike =
+                    !show.empty() && (std::isdigit(static_cast<unsigned char>(show[0])) ||
+                                      show[0] == '-' || show[0] == '#');
+                float tx = numLike ? x + w - 10.f - show.size() * 6.f : x + 4.f;
+                if (tx < x + 4.f) tx = x + 4.f;
+                window.draw(makeText(show, tx, y + 6.f, 12));
             }
         }
     }
 
-    // Tapamos el área de los headers para que no se superpongan las celdas y filas al scrollear
-    auto topCover = makeRect(0, 0, OFFSET_X, OFFSET_Y, sf::Color(230, 230, 240), sf::Color::Transparent);
-    window.draw(topCover);
+    // Borde celda activa
+    if (selR1 >= 0) {
+        float ax = static_cast<float>(ROW_HEADER_W + colOffsetPixel(activeCol)) - scrollX;
+        float ay = gridTopF + activeRow * CELL_H - scrollY;
+        float aw = static_cast<float>(colWidths[activeCol]);
+        sf::RectangleShape border(sf::Vector2f(aw, static_cast<float>(CELL_H)));
+        border.setPosition(ax, ay);
+        border.setFillColor(sf::Color::Transparent);
+        border.setOutlineColor(sf::Color(20, 120, 40));
+        border.setOutlineThickness(2.f);
+        window.draw(border);
+    }
+
+    // Esquina congelada
+    window.draw(makeRect(0.f, static_cast<float>(TOP_PANEL_H), static_cast<float>(ROW_HEADER_W),
+                         static_cast<float>(HEADER_COL_H), sf::Color(190, 190, 210)));
 }
 
 void GUI::drawTopPanel() {
-    // Fondo panel
-    auto bg = makeRect(0, 0, window.getSize().x, OFFSET_Y - CELL_H,
-                       sf::Color(230, 230, 240), sf::Color::Transparent);
-    window.draw(bg);
+    window.draw(makeRect(0.f, 0.f, static_cast<float>(window.getSize().x),
+                         static_cast<float>(TOP_PANEL_H), sf::Color(235, 235, 240)));
 
-    // Labels
-    window.draw(makeText("Celda:", 5, 15));
-    window.draw(makeText("Valor:", 265, 15));
-    window.draw(makeText("Rango:", 480, 15));
+    window.draw(makeText("Nombre", 8.f, 8.f, 12, sf::Color(60, 60, 60)));
+    window.draw(makeText("fx", 188.f, 22.f, 14, sf::Color(80, 80, 80)));
 
-    // Campos de texto
-    auto cellBox = makeRect(65, 10, 160, 28,
-                            focusCell ? sf::Color(255,255,200) : sf::Color::White);
-    window.draw(cellBox);
-    window.draw(makeText(inputCell + (focusCell ? "|" : ""), 70, 15));
+    auto nameBox = makeRect(58.f, 18.f, 140.f, 28.f,
+                            focusNameBox ? sf::Color(255, 255, 210) : sf::Color::White);
+    window.draw(nameBox);
+    std::string nb = nameBoxText + (focusNameBox ? "|" : "");
+    window.draw(makeText(nb, 64.f, 23.f, 14));
 
-    auto valBox = makeRect(325, 10, 160, 28,
-                           focusValue ? sf::Color(255,255,200) : sf::Color::White);
-    window.draw(valBox);
-    window.draw(makeText(inputValue + (focusValue ? "|" : ""), 330, 15));
+    float fxX = 210.f;
+    float fxW = static_cast<float>(window.getSize().x) - fxX - 12.f;
+    auto fxBox = makeRect(fxX, 18.f, fxW, 28.f,
+                          focusFormula ? sf::Color(255, 255, 210) : sf::Color::White);
+    window.draw(fxBox);
+    std::string fb = formulaBar + (focusFormula ? "|" : "");
+    window.draw(makeText(fb, fxX + 8.f, 23.f, 14));
 
-    auto rangeBox = makeRect(530, 10, 160, 28,
-                             focusRange ? sf::Color(255,255,200) : sf::Color::White);
-    window.draw(rangeBox);
-    window.draw(makeText(inputRange + (focusRange ? "|" : ""), 535, 15));
-
-    // Remove old buttons code here since requested to convert to commands
+    window.draw(makeText("Tab=sig celda  Enter=guardar  Esc=cancelar  Cmd/Ctrl+Z deshacer  C/V copiar/pegar",
+                         8.f, 52.f, 11, sf::Color(100, 100, 120)));
 }
 
-void GUI::drawBottomPanel() {
-    float y = OFFSET_Y + ROWS * CELL_H + 5;
-    window.draw(makeRect(0, y, window.getSize().x, 40,
-                         sf::Color(230,230,240), sf::Color::Transparent));
-    window.draw(makeText(">> " + statusMsg, 10, y + 10, 14, sf::Color(50,50,150)));
+void GUI::drawFillHandle() {
+    if (selR1 < 0) return;
+    int loR = std::min(selR1, selR2);
+    int hiR = std::max(selR1, selR2);
+    int loC = std::min(selC1, selC2);
+    int hiC = std::max(selC1, selC2);
+    float x2 = static_cast<float>(ROW_HEADER_W + colOffsetPixel(hiC) + colWidths[hiC]) - scrollX;
+    float y2 = static_cast<float>(gridTop() + (hiR + 1) * CELL_H - scrollY);
+    sf::RectangleShape fh(
+        sf::Vector2f(static_cast<float>(FILL_HANDLE), static_cast<float>(FILL_HANDLE)));
+    fh.setPosition(x2 - FILL_HANDLE - 1.f, y2 - FILL_HANDLE - 1.f);
+    fh.setFillColor(sf::Color(20, 120, 40));
+    fh.setOutlineColor(sf::Color::White);
+    fh.setOutlineThickness(1.f);
+    window.draw(fh);
 }
 
-// ─── OPERACIONES ──────────────────────────────────────────────
-void GUI::executeInsert() {
-    int r, c;
-    if (!parseCell(inputCell, r, c)) { statusMsg = "Celda invalida. Usa formato A1"; return; }
-    if (inputValue.empty())          { statusMsg = "Ingresa un valor"; return; }
-
-    std::string valueToInsert = inputValue;
-
-    // Evaluador básico de fórmulas (ej: =SUMA(A1:B2) o suma simple)
-    if (inputValue.length() > 0 && inputValue[0] == '=') {
-        std::string formula = inputValue.substr(1);
-        // Convertir a mayúsculas
-        std::transform(formula.begin(), formula.end(), formula.begin(), ::toupper);
-
-        if (formula.find("SUMA(") == 0 || formula.find("SUM(") == 0 ||
-            formula.find("PROMEDIO(") == 0 || formula.find("PROM(") == 0 ||
-            formula.find("MAX(") == 0 || formula.find("MIN(") == 0) {
-
-            size_t start = formula.find('(') + 1;
-            size_t end = formula.find(')');
-            if (start != std::string::npos && end != std::string::npos) {
-                std::string rangeStr = formula.substr(start, end - start);
-                int r1, c1, r2, c2;
-
-                double result = 0.0;
-                bool isRange = parseRange(rangeStr, r1, c1, r2, c2);
-                bool isCell = false;
-                if (!isRange) {
-                    isCell = parseCell(rangeStr, r1, c1);
-                    r2 = r1; c2 = c1;
-                }
-
-                if (isRange || isCell) {
-                    if (formula.find("SUM") == 0) {
-                        result = sheet.sumRange(r1, c1, r2, c2);
-                    } else if (formula.find("PROM") == 0) {
-                        result = sheet.avgRange(r1, c1, r2, c2);
-                    } else if (formula.find("MAX") == 0) {
-                        result = sheet.maxRange(r1, c1, r2, c2);
-                    } else if (formula.find("MIN") == 0) {
-                        result = sheet.minRange(r1, c1, r2, c2);
-                    }
-
-                    valueToInsert = formatDouble(result);
-                } else {
-                    // Evaluar suma de celdas simples separadas por + (ej: =A1+B2)
-                    statusMsg = "Error en formato de fórmula"; return;
-                }
-            }
-        } else if (formula.find('+') != std::string::npos) {
-            // Soporte básico para =A1+B2+C3
-            std::stringstream ss(formula);
-            std::string cellRef;
-            double totalSum = 0.0;
-            bool valid = true;
-
-            while (std::getline(ss, cellRef, '+')) {
-                int rr, cc;
-                if (parseCell(cellRef, rr, cc)) {
-                    std::string valStr = sheet.query(rr, cc);
-                    try {
-                        totalSum += std::stod(valStr);
-                    } catch (...) {
-                        // Ignorar si no es número
-                    }
-                } else {
-                    valid = false;
-                    break;
-                }
-            }
-            if (valid) {
-                valueToInsert = formatDouble(totalSum);
-            } else {
-                statusMsg = "Error sumando celdas: " + formula; return;
-            }
-        }
-    }
-
-    sheet.insert(r, c, valueToInsert);
-    statusMsg = "Insertado " + inputCell + " = " + valueToInsert;
+void GUI::drawStatusBar() {
+    float y = static_cast<float>(window.getSize().y - STATUS_H);
+    window.draw(makeRect(0.f, y, static_cast<float>(window.getSize().x),
+                         static_cast<float>(STATUS_H), sf::Color(230, 230, 235)));
+    window.draw(makeText(">> " + statusMsg, 10.f, y + 10.f, 14, sf::Color(40, 40, 120)));
 }
 
-void GUI::executeDelete() {
-    // Si hay rango, eliminar rango; si hay celda, eliminar celda
-    if (!inputRange.empty()) {
-        int r1,c1,r2,c2;
-        if (!parseRange(inputRange, r1,c1,r2,c2)) { statusMsg = "Rango invalido. Usa A1:C4"; return; }
-        sheet.deleteRange(r1,c1,r2,c2);
-        statusMsg = "Rango " + inputRange + " eliminado";
-    } else {
-        int r, c;
-        if (!parseCell(inputCell, r, c)) { statusMsg = "Celda invalida. Usa formato A1"; return; }
-        sheet.deleteCell(r, c);
-        statusMsg = "Celda " + inputCell + " eliminada";
-    }
-}
-
-void GUI::executeQuery() {
-    int r, c;
-    if (!parseCell(inputCell, r, c)) { statusMsg = "Celda invalida. Usa formato A1"; return; }
-    std::string val = sheet.query(r, c);
-    statusMsg = val.empty() ? inputCell + " esta vacia" : inputCell + " = " + val;
-}
-
-void GUI::executeAggregation(const std::string& op) {
-    double result = 0.0;
-
-    // Si hay rango, operar sobre rango
-    if (!inputRange.empty()) {
-        int r1,c1,r2,c2;
-        if (!parseRange(inputRange, r1,c1,r2,c2)) { statusMsg = "Rango invalido"; return; }
-        if      (op == "SUMA")     result = sheet.sumRange(r1,c1,r2,c2);
-        else if (op == "PROMEDIO") result = sheet.avgRange(r1,c1,r2,c2);
-        else if (op == "MAX")      result = sheet.maxRange(r1,c1,r2,c2);
-        else if (op == "MIN")      result = sheet.minRange(r1,c1,r2,c2);
-        statusMsg = op + "(" + inputRange + ") = " + formatDouble(result);
-    }
-    // Si no hay rango, intentar con celda/fila/columna
-    else {
-        int r, c;
-        if (!parseCell(inputCell, r, c)) { statusMsg = "Ingresa un rango (ej. A1:C4)"; return; }
-        if      (op == "SUMA")     result = sheet.sumRow(r);
-        else if (op == "PROMEDIO") result = sheet.avgRange(r,0,r,COLS-1);
-        else if (op == "MAX")      result = sheet.maxRange(r,0,r,COLS-1);
-        else if (op == "MIN")      result = sheet.minRange(r,0,r,COLS-1);
-        statusMsg = op + "(fila " + std::to_string(r+1) + ") = " + formatDouble(result);
-    }
-}
-
-// ─── PARSERS ──────────────────────────────────────────────────
-// "B3" → col=1, row=2
-bool GUI::parseCell(const std::string& ref, int& row, int& col) {
-    if (ref.size() < 2) return false;
-    char colChar = std::toupper(ref[0]);
-    if (colChar < 'A' || colChar > 'Z') return false;
-    col = colChar - 'A';
-    try {
-        row = std::stoi(ref.substr(1)) - 1; // 1-indexed → 0-indexed
-    } catch (...) { return false; }
-    return row >= 0;
-}
-
-// "A1:C4" → r1=0,c1=0,r2=3,c2=2
-bool GUI::parseRange(const std::string& ref, int& r1, int& c1, int& r2, int& c2) {
-    auto sep = ref.find(':');
-    if (sep == std::string::npos) return false;
-    return parseCell(ref.substr(0, sep), r1, c1) &&
-           parseCell(ref.substr(sep + 1), r2, c2);
-}
-
-// ─── HELPERS ──────────────────────────────────────────────────
-std::string GUI::formatDouble(double value) {
-    std::string str = std::to_string(value);
-    str.erase(str.find_last_not_of('0') + 1, std::string::npos);
-    if (!str.empty() && str.back() == '.') {
-        str.pop_back();
-    }
-    return str;
-}
-
-sf::Text GUI::makeText(const std::string& str, float x, float y,
-                       unsigned size, sf::Color color) {
+sf::Text GUI::makeText(const std::string& str, float x, float y, unsigned size,
+                       sf::Color color) {
     sf::Text t;
     t.setFont(font);
     t.setString(str);
@@ -541,12 +839,12 @@ sf::Text GUI::makeText(const std::string& str, float x, float y,
     return t;
 }
 
-sf::RectangleShape GUI::makeRect(float x, float y, float w, float h,
-                                 sf::Color fill, sf::Color outline) {
+sf::RectangleShape GUI::makeRect(float x, float y, float w, float h, sf::Color fill,
+                                   sf::Color outline) {
     sf::RectangleShape r(sf::Vector2f(w, h));
     r.setPosition(x, y);
     r.setFillColor(fill);
     r.setOutlineColor(outline);
-    r.setOutlineThickness(1);
+    r.setOutlineThickness(1.f);
     return r;
 }

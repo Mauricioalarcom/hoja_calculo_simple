@@ -1,7 +1,11 @@
 #pragma once
 #include <SFML/Graphics.hpp>
+#include <SFML/Window/Clipboard.hpp>
 #include "SparseMatrix.h"
+#include <deque>
+#include <map>
 #include <string>
+#include <vector>
 
 class GUI {
 public:
@@ -9,63 +13,96 @@ public:
     void run();
 
 private:
-    // ── Core ──────────────────────────────────────────────────
     SparseMatrix& sheet;
     sf::RenderWindow window;
     sf::Font font;
 
-    // ── Grilla ────────────────────────────────────────────────
-    static const int COLS       = 40;
-    static const int ROWS       = 200;
-    static const int CELL_W     = 90;
-    static const int CELL_H     = 30;
-    static const int OFFSET_X   = 40;  // espacio para headers de fila
-    static const int OFFSET_Y   = 120; // espacio para panel superior
+    static const int COLS = 40;
+    static const int ROWS = 200;
+    static constexpr int DEFAULT_COL_W = 88;
+    static const int CELL_H = 28;
+    static const int ROW_HEADER_W = 52;
+    static const int TOP_PANEL_H = 72;
+    static const int HEADER_COL_H = 26;
+    static const int STATUS_H = 36;
+    static const int FILL_HANDLE = 6;
 
-    // ── Estado del input ──────────────────────────────────────
-    std::string inputCell;   // ej. "B3"
-    std::string inputValue;  // ej. "42"
-    std::string inputRange;  // ej. "A1:C4"
-    std::string statusMsg;   // mensaje de resultado
+    int gridTop() const { return TOP_PANEL_H + HEADER_COL_H; }
 
-    bool focusCell  = true;  // true = foco en inputCell
-    bool focusValue = false;
-    bool focusRange = false;
+    std::vector<int> colWidths;
 
-    // ── Scrolling ─────────────────────────────────────────────
-    float scrollX = 0.0f;
-    float scrollY = 0.0f;
+    float scrollX = 0.f;
+    float scrollY = 0.f;
 
-    // ── Selección con el mouse ────────────────────────────────
-    int selectedStartRow = -1;
-    int selectedStartCol = -1;
-    int selectedEndRow = -1;
-    int selectedEndCol = -1;
+    int selR1 = -1, selC1 = -1, selR2 = -1, selC2 = -1;
+    int activeRow = 0;
+    int activeCol = 0;
+    int anchorRow = 0;
+    int anchorCol = 0;
+
+    std::string nameBoxText;
+    std::string formulaBar;
+    bool focusNameBox = false;
+    bool focusFormula = true;
+    bool formulaDirty = false;
+
+    std::string statusMsg;
+
+    std::deque<std::map<std::pair<int, int>, std::string>> undoStack;
+    std::deque<std::map<std::pair<int, int>, std::string>> redoStack;
+    static const size_t MAX_UNDO = 80;
+
     bool isDragging = false;
+    bool isFillDragging = false;
+    int fillEndRow = -1;
+    int fillEndCol = -1;
+    int resizeColIndex = -1;
+    float resizeStartMouseX = 0.f;
+    int resizeStartWidth = 0;
+    bool clickHadShift = false;
 
-    // ── Helpers ───────────────────────────────────────────────
+    sf::Clock dblClickClock;
+    int lastClickRow = -1;
+    int lastClickCol = -1;
+
+    int totalGridWidth() const;
+    int colOffsetPixel(int col) const;
+    /// Returns column index; edgeDist = distance to right edge of header (for resize).
+    int pickColumnFromX(float gx, float& edgeDist) const;
+    int pickRowFromY(float gy) const;
+
+    void pushUndo();
+    void undo();
+    void redo();
+
+    void syncNameBoxFromSelection();
+    void loadFormulaBarFromActiveCell();
+    void commitActiveCell();
+    void cancelEdit();
+
+    void clampScroll();
     void handleEvents();
-    void render();
-
     void drawGrid();
     void drawTopPanel();
-    void drawBottomPanel();
+    void drawStatusBar();
+    void drawFillHandle();
 
-    void executeInsert();
-    void executeDelete();
-    void executeQuery();
+    void executeDeleteSelection();
     void executeAggregation(const std::string& op);
+    void copySelectionToClipboard();
+    void pasteFromClipboard();
 
-    // Formatear números sin ceros extra
-    std::string formatDouble(double value);
+    void applyFill(int endRow, int endCol);
 
-    // Convierte "B3" → (row=2, col=1)
-    bool parseCell(const std::string& ref, int& row, int& col);
-    // Convierte "A1:C4" → (r1,c1,r2,c2)
-    bool parseRange(const std::string& ref, int& r1, int& c1, int& r2, int& c2);
+    std::string formatCellDisplay(int row, int col) const;
+    static std::string applyThousands(const std::string& numericDisplay);
+
+    bool parseCellInput(const std::string& ref, int& row, int& col);
+    bool parseRangeInput(const std::string& ref, int& r1, int& c1, int& r2, int& c2);
+    void navigateNameBoxToCell();
 
     sf::Text makeText(const std::string& str, float x, float y,
                       unsigned size = 14, sf::Color color = sf::Color::Black);
     sf::RectangleShape makeRect(float x, float y, float w, float h,
-                                sf::Color fill, sf::Color outline = sf::Color::Black);
+                                  sf::Color fill, sf::Color outline = sf::Color(160, 160, 160));
 };

@@ -342,3 +342,25 @@ double SparseMatrix::minRange(int r1, int c1, int r2, int c2) const {
     }
     return found ? result : 0.0;
 }
+
+// ─── SNAPSHOT / CLEAR ─────────────────────────────────────────
+void SparseMatrix::clearAll() {
+    std::vector<std::pair<int, int>> coords;
+    for (Node* n : getAllNodes())
+        coords.push_back({n->row, n->col});
+    for (auto& p : coords)
+        deleteCell(p.first, p.second);
+}
+
+std::map<std::pair<int, int>, std::string> SparseMatrix::snapshotCells() const {
+    std::map<std::pair<int, int>, std::string> out;
+    for (Node* n : getAllNodes())
+        out[{n->row, n->col}] = n->value;
+    return out;
+}
+
+void SparseMatrix::restoreSnapshot(const std::map<std::pair<int, int>, std::string>& snap) {
+    clearAll();
+    for (const auto& [rc, val] : snap)
+        insert(rc.first, rc.second, val);
+}

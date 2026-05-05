@@ -38,4 +38,11 @@ public:
     std::vector<Node*> getAllNodes() const;
     std::vector<Node*> getRow(int row) const;
     std::vector<Node*> getCol(int col) const;
+
+    /// Vacía la hoja (todas las celdas).
+    void clearAll();
+
+    /// Copia completa para deshacer / portapapeles interno.
+    std::map<std::pair<int, int>, std::string> snapshotCells() const;
+    void restoreSnapshot(const std::map<std::pair<int, int>, std::string>& snap);
 };
