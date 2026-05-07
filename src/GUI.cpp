@@ -72,6 +72,31 @@ void GUI::clampScroll() {
     if (scrollY > maxScrollY) scrollY = maxScrollY;
 }
 
+void GUI::ensureCellVisible(int r, int c) {
+    float viewW = static_cast<float>(window.getSize().x - ROW_HEADER_W);
+    float viewH = static_cast<float>(window.getSize().y - gridTop() - STATUS_H);
+
+    float cx1 = static_cast<float>(colOffsetPixel(c));
+    float cx2 = cx1 + static_cast<float>(colWidths[c]);
+
+    if (cx1 < scrollX) {
+        scrollX = cx1;
+    } else if (cx2 > scrollX + viewW) {
+        scrollX = cx2 - viewW;
+    }
+
+    float cy1 = static_cast<float>(r * CELL_H);
+    float cy2 = cy1 + static_cast<float>(CELL_H);
+
+    if (cy1 < scrollY) {
+        scrollY = cy1;
+    } else if (cy2 > scrollY + viewH) {
+        scrollY = cy2 - viewH;
+    }
+
+    clampScroll();
+}
+
 void GUI::pushUndo() {
     undoStack.push_back(sheet.snapshotCells());
     if (undoStack.size() > MAX_UNDO) undoStack.pop_front();
@@ -395,6 +420,7 @@ void GUI::handleEvents() {
             if (event.key.code == sf::Keyboard::Enter) {
                 if (focusNameBox) {
                     navigateNameBoxToCell();
+                    ensureCellVisible(activeRow, activeCol);
                 } else {
                     commitActiveCell();
                     if (activeRow < ROWS - 1) {
@@ -409,6 +435,7 @@ void GUI::handleEvents() {
                     selC1 = selC2 = activeCol;
                     syncNameBoxFromSelection();
                     loadFormulaBarFromActiveCell();
+                    ensureCellVisible(activeRow, activeCol);
                 }
                 continue;
             }
@@ -461,6 +488,7 @@ void GUI::handleEvents() {
                 }
                 syncNameBoxFromSelection();
                 loadFormulaBarFromActiveCell();
+                ensureCellVisible(selR2, selC2);
                 continue;
             }
 

@@ -81,6 +81,7 @@ private:
     void cancelEdit();
 
     void clampScroll();
+    void ensureCellVisible(int r, int c);
     void handleEvents();
     void drawGrid();
     void drawTopPanel();
