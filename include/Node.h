@@ -11,3 +11,19 @@ struct Node {
         : row(r), col(c), value(v),
           nextInRow(nullptr), nextInCol(nullptr) {}
 };
+
+struct RowHeader {
+    int row;
+    Node* firstCell;
+    RowHeader* next;
+
+    RowHeader(int r) : row(r), firstCell(nullptr), next(nullptr) {}
+};
+
+struct ColHeader {
+    int col;
+    Node* firstCell;
+    ColHeader* next;
+
+    ColHeader(int c) : col(c), firstCell(nullptr), next(nullptr) {}
+};

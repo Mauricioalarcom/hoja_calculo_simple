@@ -1,13 +1,18 @@
 #pragma once
 #include "Node.h"
-#include <map>
 #include <string>
 #include <vector>
 
 class SparseMatrix {
 private:
-    std::map<int, Node*> rowHeads; // cabecera por fila
-    std::map<int, Node*> colHeads; // cabecera por columna
+    RowHeader* firstRow = nullptr;
+    ColHeader* firstCol = nullptr;
+
+    RowHeader* getRowHeader(int row) const;
+    ColHeader* getColHeader(int col) const;
+    RowHeader* getOrCreateRowHeader(int row);
+    ColHeader* getOrCreateColHeader(int col);
+
     Node* findNode(int row, int col) const; // auxiliar para buscar nodo
     bool toDouble(const std::string& val, double& out) const;
 
@@ -43,6 +48,6 @@ public:
     void clearAll();
 
     /// Copia completa para deshacer / portapapeles interno.
-    std::map<std::pair<int, int>, std::string> snapshotCells() const;
-    void restoreSnapshot(const std::map<std::pair<int, int>, std::string>& snap);
+    std::vector<std::pair<std::pair<int, int>, std::string>> snapshotCells() const;
+    void restoreSnapshot(const std::vector<std::pair<std::pair<int, int>, std::string>>& snap);
 };

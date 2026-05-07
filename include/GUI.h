@@ -51,8 +51,8 @@ private:
 
     std::string statusMsg;
 
-    std::deque<std::map<std::pair<int, int>, std::string>> undoStack;
-    std::deque<std::map<std::pair<int, int>, std::string>> redoStack;
+    std::deque<std::vector<std::pair<std::pair<int, int>, std::string>>> undoStack;
+    std::deque<std::vector<std::pair<std::pair<int, int>, std::string>>> redoStack;
     static const size_t MAX_UNDO = 80;
 
     bool isDragging = false;

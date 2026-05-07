@@ -4,18 +4,96 @@
 #include <cmath>
 #include <limits>
 
+// ─── ESTRUCTURA DE CABECERAS ──────────────────────────────────
+RowHeader* SparseMatrix::getRowHeader(int row) const {
+    RowHeader* cur = firstRow;
+    while (cur && cur->row <= row) {
+        if (cur->row == row) return cur;
+        cur = cur->next;
+    }
+    return nullptr;
+}
+
+ColHeader* SparseMatrix::getColHeader(int col) const {
+    ColHeader* cur = firstCol;
+    while (cur && cur->col <= col) {
+        if (cur->col == col) return cur;
+        cur = cur->next;
+    }
+    return nullptr;
+}
+
+RowHeader* SparseMatrix::getOrCreateRowHeader(int row) {
+    if (!firstRow || firstRow->row > row) {
+        RowHeader* rh = new RowHeader(row);
+        rh->next = firstRow;
+        firstRow = rh;
+        return rh;
+    }
+    RowHeader* cur = firstRow;
+    while (cur->next && cur->next->row <= row) {
+        cur = cur->next;
+    }
+    if (cur->row == row) return cur;
+    RowHeader* rh = new RowHeader(row);
+    rh->next = cur->next;
+    cur->next = rh;
+    return rh;
+}
+
+ColHeader* SparseMatrix::getOrCreateColHeader(int col) {
+    if (!firstCol || firstCol->col > col) {
+        ColHeader* ch = new ColHeader(col);
+        ch->next = firstCol;
+        firstCol = ch;
+        return ch;
+    }
+    ColHeader* cur = firstCol;
+    while (cur->next && cur->next->col <= col) {
+        cur = cur->next;
+    }
+    if (cur->col == col) return cur;
+    ColHeader* ch = new ColHeader(col);
+    ch->next = cur->next;
+    cur->next = ch;
+    return ch;
+}
+
+
 // ─── Destructor ───────────────────────────────────────────────
 SparseMatrix::~SparseMatrix() {
-    // Recorremos todas las filas y liberamos cada nodo
-    for (auto& [row, head] : rowHeads) {
-        Node* cur = head;
-        while (cur) {
-            Node* next = cur->nextInRow;
-            delete cur;
-            cur = next;
-        }
+    clearAll();
+
+    // Eliminar headers
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        RowHeader* next = rcur->next;
+        delete rcur;
+        rcur = next;
     }
+    firstRow = nullptr;
+
+    ColHeader* ccur = firstCol;
+    while (ccur) {
+        ColHeader* next = ccur->next;
+        delete ccur;
+        ccur = next;
+    }
+    firstCol = nullptr;
 }
+
+// ─── FIND (auxiliar privado) ──────────────────────────────────
+Node* SparseMatrix::findNode(int row, int col) const {
+    RowHeader* rh = getRowHeader(row);
+    if (!rh) return nullptr;
+    Node* cur = rh->firstCell;
+    while (cur && cur->col <= col) {
+        if (cur->col == col) return cur;
+        cur = cur->nextInRow;
+    }
+    return nullptr;
+}
+
 
 // ─── INSERT ───────────────────────────────────────────────────
 void SparseMatrix::insert(int row, int col, const std::string& value) {
@@ -29,12 +107,12 @@ void SparseMatrix::insert(int row, int col, const std::string& value) {
     Node* newNode = new Node(row, col, value);
 
     // 2. Enlazar en la fila (orden por col)
-    if (rowHeads.find(row) == rowHeads.end() || rowHeads[row]->col > col) {
-        // Va al inicio de la fila
-        newNode->nextInRow = rowHeads.count(row) ? rowHeads[row] : nullptr;
-        rowHeads[row] = newNode;
+    RowHeader* rHead = getOrCreateRowHeader(row);
+    if (!rHead->firstCell || rHead->firstCell->col > col) {
+        newNode->nextInRow = rHead->firstCell;
+        rHead->firstCell = newNode;
     } else {
-        Node* prev = rowHeads[row];
+        Node* prev = rHead->firstCell;
         while (prev->nextInRow && prev->nextInRow->col < col)
             prev = prev->nextInRow;
         newNode->nextInRow = prev->nextInRow;
@@ -42,31 +120,17 @@ void SparseMatrix::insert(int row, int col, const std::string& value) {
     }
 
     // 3. Enlazar en la columna (orden por row)
-    if (colHeads.find(col) == colHeads.end() || colHeads[col]->row > row) {
-        // Va al inicio de la columna
-        newNode->nextInCol = colHeads.count(col) ? colHeads[col] : nullptr;
-        colHeads[col] = newNode;
+    ColHeader* cHead = getOrCreateColHeader(col);
+    if (!cHead->firstCell || cHead->firstCell->row > row) {
+        newNode->nextInCol = cHead->firstCell;
+        cHead->firstCell = newNode;
     } else {
-        Node* prev = colHeads[col];
+        Node* prev = cHead->firstCell;
         while (prev->nextInCol && prev->nextInCol->row < row)
             prev = prev->nextInCol;
         newNode->nextInCol = prev->nextInCol;
         prev->nextInCol = newNode;
     }
-}
-
-// ─── FIND (auxiliar privado) ──────────────────────────────────
-// Agrega esto al header en la sección private:
-//   Node* findNode(int row, int col) const;
-Node* SparseMatrix::findNode(int row, int col) const {
-    auto it = rowHeads.find(row);
-    if (it == rowHeads.end()) return nullptr;
-    Node* cur = it->second;
-    while (cur && cur->col <= col) {
-        if (cur->col == col) return cur;
-        cur = cur->nextInRow;
-    }
-    return nullptr;
 }
 
 // ─── QUERY ────────────────────────────────────────────────────
@@ -85,18 +149,16 @@ void SparseMatrix::modify(int row, int col, const std::string& value) {
 // ─── DELETE CELL ──────────────────────────────────────────────
 void SparseMatrix::deleteCell(int row, int col) {
     // 1. Desenlazar de la fila
-    auto rowIt = rowHeads.find(row);
-    if (rowIt == rowHeads.end()) return;  // fila vacía, nada que hacer
+    RowHeader* rh = getRowHeader(row);
+    if (!rh || !rh->firstCell) return;
 
     Node* target = nullptr;
 
-    if (rowIt->second->col == col) {
-        // Es la cabeza de la fila
-        target = rowIt->second;
-        rowIt->second = target->nextInRow;
-        if (!rowIt->second) rowHeads.erase(rowIt); // fila quedó vacía
+    if (rh->firstCell->col == col) {
+        target = rh->firstCell;
+        rh->firstCell = target->nextInRow;
     } else {
-        Node* prev = rowIt->second;
+        Node* prev = rh->firstCell;
         while (prev->nextInRow && prev->nextInRow->col != col)
             prev = prev->nextInRow;
         if (!prev->nextInRow) return; // no existe
@@ -105,15 +167,16 @@ void SparseMatrix::deleteCell(int row, int col) {
     }
 
     // 2. Desenlazar de la columna
-    auto colIt = colHeads.find(col);
-    if (colIt->second->row == row) {
-        colIt->second = target->nextInCol;
-        if (!colIt->second) colHeads.erase(colIt); // columna quedó vacía
-    } else {
-        Node* prev = colIt->second;
-        while (prev->nextInCol && prev->nextInCol->row != row)
-            prev = prev->nextInCol;
-        if (prev->nextInCol) prev->nextInCol = target->nextInCol;
+    ColHeader* ch = getColHeader(col);
+    if (ch && ch->firstCell) {
+        if (ch->firstCell->row == row) {
+            ch->firstCell = target->nextInCol;
+        } else {
+            Node* prev = ch->firstCell;
+            while (prev->nextInCol && prev->nextInCol->row != row)
+                prev = prev->nextInCol;
+            if (prev->nextInCol) prev->nextInCol = target->nextInCol;
+        }
     }
 
     delete target;
@@ -122,21 +185,23 @@ void SparseMatrix::deleteCell(int row, int col) {
 // ─── VISUALIZACIÓN ────────────────────────────────────────────
 std::vector<Node*> SparseMatrix::getAllNodes() const {
     std::vector<Node*> result;
-    for (auto& [row, head] : rowHeads) {
-        Node* cur = head;
+    RowHeader* curRow = firstRow;
+    while (curRow) {
+        Node* cur = curRow->firstCell;
         while (cur) {
             result.push_back(cur);
             cur = cur->nextInRow;
         }
+        curRow = curRow->next;
     }
     return result;
 }
 
 std::vector<Node*> SparseMatrix::getRow(int row) const {
     std::vector<Node*> result;
-    auto it = rowHeads.find(row);
-    if (it == rowHeads.end()) return result;
-    Node* cur = it->second;
+    RowHeader* rh = getRowHeader(row);
+    if (!rh) return result;
+    Node* cur = rh->firstCell;
     while (cur) {
         result.push_back(cur);
         cur = cur->nextInRow;
@@ -146,9 +211,9 @@ std::vector<Node*> SparseMatrix::getRow(int row) const {
 
 std::vector<Node*> SparseMatrix::getCol(int col) const {
     std::vector<Node*> result;
-    auto it = colHeads.find(col);
-    if (it == colHeads.end()) return result;
-    Node* cur = it->second;
+    ColHeader* ch = getColHeader(col);
+    if (!ch) return result;
+    Node* cur = ch->firstCell;
     while (cur) {
         result.push_back(cur);
         cur = cur->nextInCol;
@@ -159,31 +224,30 @@ std::vector<Node*> SparseMatrix::getCol(int col) const {
 
 // ─── DELETE ROW ───────────────────────────────────────────────
 void SparseMatrix::deleteRow(int row) {
-    auto rowIt = rowHeads.find(row);
-    if (rowIt == rowHeads.end()) return; // fila vacía, nada que hacer
+    RowHeader* rh = getRowHeader(row);
+    if (!rh) return; // fila vacía, nada que hacer
 
     // 1. Recolectar todas las columnas ocupadas en esta fila
     std::vector<int> cols;
-    Node* cur = rowIt->second;
+    Node* cur = rh->firstCell;
     while (cur) {
         cols.push_back(cur->col);
         cur = cur->nextInRow;
     }
 
-    // 2. Eliminar cada celda (desenlaza de columna y libera memoria)
+    // 2. Eliminar cada celda
     for (int col : cols)
         deleteCell(row, col);
-    // rowHeads[row] ya fue borrado por el último deleteCell
 }
 
 // ─── DELETE COLUMN ────────────────────────────────────────────
 void SparseMatrix::deleteCol(int col) {
-    auto colIt = colHeads.find(col);
-    if (colIt == colHeads.end()) return; // columna vacía, nada que hacer
+    ColHeader* ch = getColHeader(col);
+    if (!ch) return;
 
     // 1. Recolectar todas las filas ocupadas en esta columna
     std::vector<int> rows;
-    Node* cur = colIt->second;
+    Node* cur = ch->firstCell;
     while (cur) {
         rows.push_back(cur->row);
         cur = cur->nextInCol;
@@ -192,29 +256,26 @@ void SparseMatrix::deleteCol(int col) {
     // 2. Eliminar cada celda
     for (int row : rows)
         deleteCell(row, col);
-    // colHeads[col] ya fue borrado por el último deleteCell
 }
 
 // ─── DELETE RANGE ─────────────────────────────────────────────
 void SparseMatrix::deleteRange(int r1, int c1, int r2, int c2) {
-    // Normalizar por si vienen invertidos (ej. r2 < r1)
     if (r1 > r2) std::swap(r1, r2);
     if (c1 > c2) std::swap(c1, c2);
 
-    // 1. Recolectar todas las celdas dentro del rango
     std::vector<std::pair<int,int>> targets;
-
-    for (auto& [row, head] : rowHeads) {
-        if (row < r1 || row > r2) continue;
-        Node* cur = head;
-        while (cur) {
-            if (cur->col >= c1 && cur->col <= c2)
-                targets.push_back({cur->row, cur->col});
-            cur = cur->nextInRow;
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        if (rcur->row >= r1 && rcur->row <= r2) {
+            Node* cur = rcur->firstCell;
+            while (cur && cur->col <= c2) {
+                if (cur->col >= c1) targets.push_back({cur->row, cur->col});
+                cur = cur->nextInRow;
+            }
         }
+        rcur = rcur->next;
     }
 
-    // 2. Eliminar todas las celdas recolectadas
     for (auto& [row, col] : targets)
         deleteCell(row, col);
 }
@@ -256,16 +317,19 @@ double SparseMatrix::sumRange(int r1, int c1, int r2, int c2) const {
     if (c1 > c2) std::swap(c1, c2);
 
     double total = 0.0;
-    for (auto& [row, head] : rowHeads) {
-        if (row < r1 || row > r2) continue;
-        Node* cur = head;
-        while (cur) {
-            if (cur->col >= c1 && cur->col <= c2) {
-                double v;
-                if (toDouble(cur->value, v)) total += v;
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        if (rcur->row >= r1 && rcur->row <= r2) {
+            Node* cur = rcur->firstCell;
+            while (cur && cur->col <= c2) {
+                if (cur->col >= c1) {
+                    double v;
+                    if (toDouble(cur->value, v)) total += v;
+                }
+                cur = cur->nextInRow;
             }
-            cur = cur->nextInRow;
         }
+        rcur = rcur->next;
     }
     return total;
 }
@@ -277,21 +341,23 @@ double SparseMatrix::avgRange(int r1, int c1, int r2, int c2) const {
 
     double total = 0.0;
     int count = 0;
-    for (auto& [row, head] : rowHeads) {
-        if (row < r1 || row > r2) continue;
-        Node* cur = head;
-        while (cur) {
-            if (cur->col >= c1 && cur->col <= c2) {
-                double v;
-                if (toDouble(cur->value, v)) {
-                    total += v;
-                    count++;
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        if (rcur->row >= r1 && rcur->row <= r2) {
+            Node* cur = rcur->firstCell;
+            while (cur && cur->col <= c2) {
+                if (cur->col >= c1) {
+                    double v;
+                    if (toDouble(cur->value, v)) {
+                        total += v;
+                        count++;
+                    }
                 }
+                cur = cur->nextInRow;
             }
-            cur = cur->nextInRow;
         }
+        rcur = rcur->next;
     }
-    // Caso borde: ninguna celda numérica en el rango
     return count > 0 ? total / count : 0.0;
 }
 
@@ -302,19 +368,22 @@ double SparseMatrix::maxRange(int r1, int c1, int r2, int c2) const {
 
     double result = std::numeric_limits<double>::lowest();
     bool found = false;
-    for (auto& [row, head] : rowHeads) {
-        if (row < r1 || row > r2) continue;
-        Node* cur = head;
-        while (cur) {
-            if (cur->col >= c1 && cur->col <= c2) {
-                double v;
-                if (toDouble(cur->value, v)) {
-                    result = std::max(result, v);
-                    found = true;
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        if (rcur->row >= r1 && rcur->row <= r2) {
+            Node* cur = rcur->firstCell;
+            while (cur && cur->col <= c2) {
+                if (cur->col >= c1) {
+                    double v;
+                    if (toDouble(cur->value, v)) {
+                        result = std::max(result, v);
+                        found = true;
+                    }
                 }
+                cur = cur->nextInRow;
             }
-            cur = cur->nextInRow;
         }
+        rcur = rcur->next;
     }
     return found ? result : 0.0;
 }
@@ -326,19 +395,22 @@ double SparseMatrix::minRange(int r1, int c1, int r2, int c2) const {
 
     double result = std::numeric_limits<double>::max();
     bool found = false;
-    for (auto& [row, head] : rowHeads) {
-        if (row < r1 || row > r2) continue;
-        Node* cur = head;
-        while (cur) {
-            if (cur->col >= c1 && cur->col <= c2) {
-                double v;
-                if (toDouble(cur->value, v)) {
-                    result = std::min(result, v);
-                    found = true;
+    RowHeader* rcur = firstRow;
+    while (rcur) {
+        if (rcur->row >= r1 && rcur->row <= r2) {
+            Node* cur = rcur->firstCell;
+            while (cur && cur->col <= c2) {
+                if (cur->col >= c1) {
+                    double v;
+                    if (toDouble(cur->value, v)) {
+                        result = std::min(result, v);
+                        found = true;
+                    }
                 }
+                cur = cur->nextInRow;
             }
-            cur = cur->nextInRow;
         }
+        rcur = rcur->next;
     }
     return found ? result : 0.0;
 }
@@ -352,15 +424,15 @@ void SparseMatrix::clearAll() {
         deleteCell(p.first, p.second);
 }
 
-std::map<std::pair<int, int>, std::string> SparseMatrix::snapshotCells() const {
-    std::map<std::pair<int, int>, std::string> out;
+std::vector<std::pair<std::pair<int, int>, std::string>> SparseMatrix::snapshotCells() const {
+    std::vector<std::pair<std::pair<int, int>, std::string>> out;
     for (Node* n : getAllNodes())
-        out[{n->row, n->col}] = n->value;
+        out.push_back({{n->row, n->col}, n->value});
     return out;
 }
 
-void SparseMatrix::restoreSnapshot(const std::map<std::pair<int, int>, std::string>& snap) {
+void SparseMatrix::restoreSnapshot(const std::vector<std::pair<std::pair<int, int>, std::string>>& snap) {
     clearAll();
-    for (const auto& [rc, val] : snap)
-        insert(rc.first, rc.second, val);
+    for (const auto& kv : snap)
+        insert(kv.first.first, kv.first.second, kv.second);
 }
