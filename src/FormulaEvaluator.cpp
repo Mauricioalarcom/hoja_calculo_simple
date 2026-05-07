@@ -149,7 +149,8 @@ double aggregateSumRect(const SparseMatrix& m, int r1, int c1, int r2, int c2,
     for (int rr = r1; rr <= r2; rr++)
         for (int cc = c1; cc <= c2; cc++) {
             double v = cellNumericRec(m, rr, cc, vis);
-            if (!std::isnan(v)) sum += v;
+            if (std::isnan(v)) throw std::runtime_error(std::string(kVal));
+            sum += v;
         }
     return sum;
 }
@@ -163,10 +164,9 @@ double aggregateAvgRect(const SparseMatrix& m, int r1, int c1, int r2, int c2,
     for (int rr = r1; rr <= r2; rr++)
         for (int cc = c1; cc <= c2; cc++) {
             double v = cellNumericRec(m, rr, cc, vis);
-            if (!std::isnan(v)) {
-                sum += v;
-                n++;
-            }
+            if (std::isnan(v)) throw std::runtime_error(std::string(kVal));
+            sum += v;
+            n++;
         }
     return n > 0 ? sum / n : 0.0;
 }
@@ -180,10 +180,9 @@ double aggregateMaxRect(const SparseMatrix& m, int r1, int c1, int r2, int c2,
     for (int rr = r1; rr <= r2; rr++)
         for (int cc = c1; cc <= c2; cc++) {
             double v = cellNumericRec(m, rr, cc, vis);
-            if (!std::isnan(v)) {
-                mx = std::max(mx, v);
-                any = true;
-            }
+            if (std::isnan(v)) throw std::runtime_error(std::string(kVal));
+            mx = std::max(mx, v);
+            any = true;
         }
     return any ? mx : 0.0;
 }
@@ -197,10 +196,9 @@ double aggregateMinRect(const SparseMatrix& m, int r1, int c1, int r2, int c2,
     for (int rr = r1; rr <= r2; rr++)
         for (int cc = c1; cc <= c2; cc++) {
             double v = cellNumericRec(m, rr, cc, vis);
-            if (!std::isnan(v)) {
-                mn = std::min(mn, v);
-                any = true;
-            }
+            if (std::isnan(v)) throw std::runtime_error(std::string(kVal));
+            mn = std::min(mn, v);
+            any = true;
         }
     return any ? mn : 0.0;
 }
@@ -213,7 +211,8 @@ double aggregateCountRect(const SparseMatrix& m, int r1, int c1, int r2, int c2,
     for (int rr = r1; rr <= r2; rr++)
         for (int cc = c1; cc <= c2; cc++) {
             double v = cellNumericRec(m, rr, cc, vis);
-            if (!std::isnan(v)) n++;
+            if (std::isnan(v)) throw std::runtime_error(std::string(kVal));
+            n++;
         }
     return static_cast<double>(n);
 }
@@ -485,27 +484,47 @@ double FormulaEvaluator::cellNumeric(const SparseMatrix& m, int row, int col) {
 
 double FormulaEvaluator::aggregateSum(const SparseMatrix& m, int r1, int c1, int r2, int c2) {
     std::set<std::pair<int, int>> vis;
-    return aggregateSumRect(m, r1, c1, r2, c2, vis);
+    try {
+        return aggregateSumRect(m, r1, c1, r2, c2, vis);
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 double FormulaEvaluator::aggregateAvg(const SparseMatrix& m, int r1, int c1, int r2, int c2) {
     std::set<std::pair<int, int>> vis;
-    return aggregateAvgRect(m, r1, c1, r2, c2, vis);
+    try {
+        return aggregateAvgRect(m, r1, c1, r2, c2, vis);
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 double FormulaEvaluator::aggregateMax(const SparseMatrix& m, int r1, int c1, int r2, int c2) {
     std::set<std::pair<int, int>> vis;
-    return aggregateMaxRect(m, r1, c1, r2, c2, vis);
+    try {
+        return aggregateMaxRect(m, r1, c1, r2, c2, vis);
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 double FormulaEvaluator::aggregateMin(const SparseMatrix& m, int r1, int c1, int r2, int c2) {
     std::set<std::pair<int, int>> vis;
-    return aggregateMinRect(m, r1, c1, r2, c2, vis);
+    try {
+        return aggregateMinRect(m, r1, c1, r2, c2, vis);
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 double FormulaEvaluator::aggregateCount(const SparseMatrix& m, int r1, int c1, int r2, int c2) {
     std::set<std::pair<int, int>> vis;
-    return aggregateCountRect(m, r1, c1, r2, c2, vis);
+    try {
+        return aggregateCountRect(m, r1, c1, r2, c2, vis);
+    } catch (...) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 std::string FormulaEvaluator::formatNumber(double value) {
