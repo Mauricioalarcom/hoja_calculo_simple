@@ -340,6 +340,35 @@ void GUI::applyFill(int endRow, int endCol) {
     statusMsg = "Relleno aplicado";
 }
 
+void GUI::maybeAppendToReferenceInFormula(int r1, int c1, int r2, int c2, bool finish) {
+    if (!focusFormula || formulaBar.empty() || formulaBar[0] != '=') return;
+
+    if (formulaRefStartIdx == -1) {
+        char lastChar = formulaBar.back();
+        if (lastChar == '(' || lastChar == '+' || lastChar == '-' || lastChar == '*' ||
+            lastChar == '/' || lastChar == ',' || lastChar == '=') {
+            formulaRefStartIdx = formulaBar.size();
+        } else {
+            return;
+        }
+    }
+
+    std::string ref;
+    if (r1 == r2 && c1 == c1) {
+        ref = cellref::colIndexToLetters(c1) + std::to_string(r1 + 1);
+    } else {
+        int minR = std::min(r1, r2);
+        int maxR = std::max(r1, r2);
+        int minC = std::min(c1, c2);
+        int maxC = std::max(c1, c2);
+        ref = cellref::colIndexToLetters(minC) + std::to_string(minR + 1) + ":" +
+              cellref::colIndexToLetters(maxC) + std::to_string(maxR + 1);
+    }
+
+    formulaBar.erase(formulaRefStartIdx);
+    formulaBar += ref;
+}
+
 void GUI::run() {
     while (window.isOpen()) {
         handleEvents();
@@ -436,6 +465,7 @@ void GUI::handleEvents() {
                     syncNameBoxFromSelection();
                     loadFormulaBarFromActiveCell();
                     ensureCellVisible(activeRow, activeCol);
+                    formulaRefStartIdx = -1;
                 }
                 continue;
             }
@@ -450,6 +480,21 @@ void GUI::handleEvents() {
                 event.key.code == sf::Keyboard::Left || event.key.code == sf::Keyboard::Right) {
                 bool shift = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ||
                              sf::Keyboard::isKeyPressed(sf::Keyboard::RShift);
+
+                bool isEditingFormula = focusFormula && !formulaBar.empty() && formulaBar[0] == '=';
+                bool formulaExpectsRef = false;
+                if (isEditingFormula) {
+                    if (formulaRefStartIdx != -1) {
+                        formulaExpectsRef = true;
+                    } else {
+                        char lastChar = formulaBar.back();
+                        if (lastChar == '(' || lastChar == '+' || lastChar == '-' || lastChar == '*' ||
+                            lastChar == '/' || lastChar == ',' || lastChar == '=') {
+                            formulaExpectsRef = true;
+                        }
+                    }
+                }
+
                 if (selR1 < 0) {
                     selR1 = selR2 = activeRow = anchorRow = 0;
                     selC1 = selC2 = activeCol = anchorCol = 0;
@@ -459,6 +504,51 @@ void GUI::handleEvents() {
                 if (event.key.code == sf::Keyboard::Down) dr = 1;
                 if (event.key.code == sf::Keyboard::Left) dc = -1;
                 if (event.key.code == sf::Keyboard::Right) dc = 1;
+
+                if (isEditingFormula && formulaExpectsRef) {
+                    if (!shift) {
+                        int nr = selR2 + dr;
+                        int nc = selC2 + dc;
+                        if (nr >= ROWS) ROWS = nr + 1;
+                        if (nc >= COLS) {
+                            while (COLS <= nc) {
+                                COLS++;
+                                colWidths.push_back(DEFAULT_COL_W);
+                            }
+                        }
+                        nr = std::max(0, std::min(ROWS - 1, nr));
+                        nc = std::max(0, std::min(COLS - 1, nc));
+                        selR1 = anchorRow = nr;
+                        selC1 = anchorCol = nc;
+                        selR2 = nr;
+                        selC2 = nc;
+                        maybeAppendToReferenceInFormula(selR1, selC1, selR2, selC2, false);
+                    } else {
+                        selR1 = anchorRow;
+                        selC1 = anchorCol;
+                        int nr = selR2 + dr;
+                        int nc = selC2 + dc;
+                        if (nr >= ROWS) ROWS = nr + 1;
+                        if (nc >= COLS) {
+                            while (COLS <= nc) {
+                                COLS++;
+                                colWidths.push_back(DEFAULT_COL_W);
+                            }
+                        }
+                        nr = std::max(0, std::min(ROWS - 1, nr));
+                        nc = std::max(0, std::min(COLS - 1, nc));
+                        selR2 = nr;
+                        selC2 = nc;
+                        maybeAppendToReferenceInFormula(selR1, selC1, selR2, selC2, false);
+                    }
+                    ensureCellVisible(selR2, selC2);
+                    continue;
+                }
+
+                if (isEditingFormula && !formulaExpectsRef) {
+                    commitActiveCell();
+                    formulaRefStartIdx = -1;
+                }
 
                 if (!shift) {
                     int nr = activeRow + dr;
@@ -495,6 +585,7 @@ void GUI::handleEvents() {
             if (event.key.code == sf::Keyboard::Delete || event.key.code == sf::Keyboard::BackSpace) {
                 if (focusFormula && event.key.code == sf::Keyboard::BackSpace &&
                     !formulaBar.empty()) {
+                    formulaRefStartIdx = -1;
                     formulaBar.pop_back();
                     formulaDirty = true;
                 } else if (focusFormula && event.key.code == sf::Keyboard::BackSpace &&
@@ -522,6 +613,8 @@ void GUI::handleEvents() {
                     nameBoxText.push_back(c);
                 else {
                     focusFormula = true;
+                    // Reset selection reference tracking on manual text input
+                    formulaRefStartIdx = -1;
                     formulaBar.push_back(c);
                     formulaDirty = true;
                 }
@@ -652,21 +745,57 @@ void GUI::handleEvents() {
                 lastClickCol = c;
 
                 isDragging = true;
-                if (!shift) {
-                    selR1 = selR2 = activeRow = anchorRow = r;
-                    selC1 = selC2 = activeCol = anchorCol = c;
-                } else {
-                    selR1 = anchorRow;
-                    selC1 = anchorCol;
-                    selR2 = r;
-                    selC2 = c;
-                    activeRow = anchorRow;
-                    activeCol = anchorCol;
+
+                bool isEditingFormula = focusFormula && !formulaBar.empty() && formulaBar[0] == '=';
+                bool formulaExpectsRef = false;
+                if (isEditingFormula) {
+                    if (formulaRefStartIdx != -1) {
+                        formulaExpectsRef = true;
+                    } else {
+                        char lastChar = formulaBar.back();
+                        if (lastChar == '(' || lastChar == '+' || lastChar == '-' || lastChar == '*' ||
+                            lastChar == '/' || lastChar == ',' || lastChar == '=') {
+                            formulaExpectsRef = true;
+                        }
+                    }
                 }
-                syncNameBoxFromSelection();
-                loadFormulaBarFromActiveCell();
-                focusFormula = true;
-                focusNameBox = false;
+
+                if (isEditingFormula && formulaExpectsRef) {
+                    if (!shift) {
+                        selR1 = anchorRow = r;
+                        selC1 = anchorCol = c;
+                        selR2 = r;
+                        selC2 = c;
+                    } else {
+                        selR2 = r;
+                        selC2 = c;
+                    }
+                    maybeAppendToReferenceInFormula(selR1, selC1, selR2, selC2, false);
+                } else {
+                    if (focusFormula && formulaDirty) {
+                        commitActiveCell();
+                    }
+                    if (!shift) {
+                        selR1 = selR2 = activeRow = anchorRow = r;
+                        selC1 = selC2 = activeCol = anchorCol = c;
+                        syncNameBoxFromSelection();
+                        loadFormulaBarFromActiveCell();
+                        focusFormula = true;
+                        focusNameBox = false;
+                    } else {
+                        selR1 = anchorRow;
+                        selC1 = anchorCol;
+                        selR2 = r;
+                        selC2 = c;
+                        activeRow = anchorRow;
+                        activeCol = anchorCol;
+                        syncNameBoxFromSelection();
+                        loadFormulaBarFromActiveCell();
+                        focusFormula = true;
+                        focusNameBox = false;
+                    }
+                    formulaRefStartIdx = -1;
+                }
             }
         }
 
@@ -687,7 +816,13 @@ void GUI::handleEvents() {
                     float edge = 0.f;
                     selR2 = pickRowFromY(gy);
                     selC2 = pickColumnFromX(gx, edge);
-                    syncNameBoxFromSelection();
+
+                    bool isEditingFormula = focusFormula && !formulaBar.empty() && formulaBar[0] == '=';
+                    if (isEditingFormula && formulaRefStartIdx != -1) {
+                        maybeAppendToReferenceInFormula(selR1, selC1, selR2, selC2, false);
+                    } else {
+                        syncNameBoxFromSelection();
+                    }
                 }
             }
             if (isFillDragging) {

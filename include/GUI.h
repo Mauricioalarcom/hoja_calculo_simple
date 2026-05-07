@@ -46,6 +46,9 @@ private:
     bool focusFormula = true;
     bool formulaDirty = false;
 
+    bool isWritingFormula = false;
+    int formulaRefStartIdx = -1;
+
     std::string statusMsg;
 
     std::deque<std::map<std::pair<int, int>, std::string>> undoStack;
@@ -92,6 +95,8 @@ private:
     void executeAggregation(const std::string& op);
     void copySelectionToClipboard();
     void pasteFromClipboard();
+
+    void maybeAppendToReferenceInFormula(int r1, int c1, int r2, int c2, bool finish);
 
     void applyFill(int endRow, int endCol);
 
