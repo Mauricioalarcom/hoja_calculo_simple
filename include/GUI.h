@@ -17,8 +17,8 @@ private:
     sf::RenderWindow window;
     sf::Font font;
 
-    static const int COLS = 40;
-    static const int ROWS = 200;
+    int COLS = 40;
+    int ROWS = 200;
     static constexpr int DEFAULT_COL_W = 88;
     static const int CELL_H = 28;
     static const int ROW_HEADER_W = 52;

@@ -377,11 +377,12 @@ void GUI::handleEvents() {
                     focusFormula = true;
                 } else if (focusFormula) {
                     commitActiveCell();
-                    if (activeCol < COLS - 1)
+                    if (activeCol < COLS - 1) {
                         activeCol++;
-                    else {
-                        activeCol = 0;
-                        if (activeRow < ROWS - 1) activeRow++;
+                    } else {
+                        COLS++;
+                        colWidths.push_back(DEFAULT_COL_W);
+                        activeCol++;
                     }
                     selR1 = selR2 = activeRow = anchorRow;
                     selC1 = selC2 = activeCol = anchorCol;
@@ -396,7 +397,12 @@ void GUI::handleEvents() {
                     navigateNameBoxToCell();
                 } else {
                     commitActiveCell();
-                    if (activeRow < ROWS - 1) activeRow++;
+                    if (activeRow < ROWS - 1) {
+                        activeRow++;
+                    } else {
+                        ROWS++;
+                        activeRow++;
+                    }
                     anchorRow = activeRow;
                     anchorCol = activeCol;
                     selR1 = selR2 = activeRow;
@@ -430,6 +436,13 @@ void GUI::handleEvents() {
                 if (!shift) {
                     int nr = activeRow + dr;
                     int nc = activeCol + dc;
+                    if (nr >= ROWS) ROWS = nr + 1;
+                    if (nc >= COLS) {
+                        while (COLS <= nc) {
+                            COLS++;
+                            colWidths.push_back(DEFAULT_COL_W);
+                        }
+                    }
                     nr = std::max(0, std::min(ROWS - 1, nr));
                     nc = std::max(0, std::min(COLS - 1, nc));
                     activeRow = anchorRow = selR1 = selR2 = nr;
