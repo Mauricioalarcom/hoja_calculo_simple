@@ -28,12 +28,12 @@ add_executable(${PROJECT_NAME} ${SOURCE_FILES}
 )
 
 if (APPLE OR UNIX)
-    message("pene")
+    message("Acces Granted for Apple or Unix")
 
     target_link_libraries(${PROJECT_NAME}  sfml-system sfml-window sfml-graphics sfml-audio)
 
 elseif(WIN32)
-    message("pene")
+    message("Acces Granted for Windows")
     set(SFML_ROOT "C:/SFML/SFML-2.5.1/64bit")
     set(SFML_DIR "${SFML_ROOT}/lib/cmake/SFML")
     set(SFML_STATIC_LIBRARIES TRUE)
@@ -43,7 +43,7 @@ elseif(WIN32)
     target_link_libraries(${PROJECT_NAME} sfml-system sfml-window sfml-graphics -static sfml-audio)
 
 else ()
-    message("pene2")
+    message("Acces denegated")
 endif()
 
 configure_file(${CMAKE_SOURCE_DIR}/arial.ttf
